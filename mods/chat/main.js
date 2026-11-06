@@ -319,8 +319,9 @@ export default class Chat extends View {
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(action)
         .child(svg(`mods/chat/icons/${icon}.svg`).size(13));
       return div().w_full().relative()
-        .child(this.markdown(id, `${p.fence}${p.lang}\n${p.code}\n${p.fence}`))
-        .child(h_flex().absolute().top(6).right(6).gap(4)
+        .child(this.markdown(id, `${p.fence}\n${p.code}\n${p.fence}`))
+        .child(h_flex().absolute().top(6).right(6).gap(4).items_center()
+          .when(Boolean(p.lang), (el) => el.child(div().pr(4).text_size(11).text_color(t.dim).child(p.lang)))
           .child(btn("copy", done ? "check" : "copy", done ? "Copied" : "Copy", (_e, cx) => this.copyOut(p.code, id, cx)))
           .child(btn("play", "play", "Put in the message box", (_e, cx) => {
             this.input.set_value("");
@@ -1467,20 +1468,22 @@ export default class Chat extends View {
       const longest = Math.max(0, ...(e.text ?? "").split("\n").map((l) => l.length));
       const w = e.images.length ? max : Math.min(max, Math.ceil(longest * 7.6) + 32);
       // On hover, Copy and Edit (back into the message box to change and send
-      // again) beside the bubble; its width changes, never its height.
+      // again) under the bubble, in a row that's always there.
       const on = this.hovered === e.key && Boolean(e.text);
-      return h_flex().id(`row-${e.key}`).w_full().justify_end().items_start().gap(4).on_hover(this.hover(e.key))
-        .when(on, (el) => el.child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
-          .child(this.tinyButton(`edit-${e.key}`, "edit", "Edit and send again", (_e, cx) => { this.input.set_value(""); this.input.replace(e.text); this.input.focus(); cx.notify(); }, t)))
+      return v_flex().id(`row-${e.key}`).w_full().items_end().gap(4).on_hover(this.hover(e.key))
         .child(v_flex().w(w).flex_none().gap(8).px(14).py(10).rounded(14).bg(t.raised)
           .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 280, 200)))))
-          .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))));
+          .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))))
+        .child(h_flex().h(24).gap(4).when(on, (el) => el
+          .child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
+          .child(this.tinyButton(`edit-${e.key}`, "edit", "Edit and send again", (_e, cx) => { this.input.set_value(""); this.input.replace(e.text); this.input.focus(); cx.notify(); }, t))));
     }
     if (e.kind === "assistant") {
-      // On hover, Copy for the whole reply, over its top right corner.
-      return div().id(`row-${e.key}`).w_full().relative().on_hover(this.hover(e.key))
+      // On hover, Copy for the whole reply, in a row under it that's always there.
+      const on = this.hovered === e.key && e.key !== "streaming";
+      return v_flex().id(`row-${e.key}`).w_full().gap(4).on_hover(this.hover(e.key))
         .child(this.reply(e, t))
-        .when(this.hovered === e.key && e.key !== "streaming", (el) => el.child(h_flex().absolute().top(-8).right(0)
+        .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t))));
     }
     if (e.kind === "card") return this.card(e, t);

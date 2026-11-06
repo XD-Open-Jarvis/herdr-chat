@@ -78,6 +78,9 @@ export class Transcript {
     const cmd = /<command-name>([^<]*)<\/command-name>/.exec(text);
     if (cmd) {
       const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim();
+      // /compact is logged again after the compaction: shown once, before it.
+      const [before, note] = this.entries.slice(-2);
+      if (note?.compact && before?.kind === "user" && before.text === `${cmd[1].trim()}${args ? " " + args : ""}`) return;
       return this.push({ kind: "user", command: true, text: `${cmd[1].trim()}${args ? " " + args : ""}`, images: [] });
     }
     const out = /<local-command-(?:stdout|stderr)>([\s\S]*?)<\/local-command-(?:stdout|stderr)>/.exec(text);
@@ -164,8 +167,9 @@ export class Transcript {
     if (d.type === "ai-title" && d.aiTitle) this.title = d.aiTitle;
     if (d.type === "system" && d.subtype === "compact_boundary") {
       // Until the next reply says exactly, the summary plus what every request carries.
-      const after = d.compactMetadata?.postTokens;
-      if (after != null) this.context = { used: after + (this.base ?? 0), window: this.context?.window ?? null };
+      // Never more than before compacting.
+      const after = d.compactMetadata?.postTokens, before = d.compactMetadata?.preTokens ?? Infinity;
+      if (after != null) this.context = { used: Math.min(after + (this.base ?? 0), before), window: this.context?.window ?? null };
       return this.push({ kind: "note", text: "Conversation compacted", compact: true });
     }
     // Slash commands and what they print, in newer versions of Claude Code.
@@ -185,7 +189,9 @@ export class Transcript {
       if (d.isMeta && typeof meta === "string" && meta.startsWith("## Context Usage")) return this.contextCard(meta);
       if (d.isCompactSummary && typeof meta === "string") {
         const note = [...this.entries].reverse().find((e) => e.compact);
-        if (note) note.summary = meta.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+        // Without the note to Claude at its end ("If you need specific details…").
+        if (note) note.summary = meta.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+          .replace(/\n+If you need specific details from before compaction[\s\S]*$/, "").trim();
         return;
       }
       if (d.isMeta || d.isCompactSummary || d.isVisibleInTranscriptOnly) return;
