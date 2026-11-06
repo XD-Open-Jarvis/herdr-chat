@@ -8,7 +8,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - replies that stream as they're written;
 - Slack-style `:emoji` autocomplete.
 
-![Herdr with the chat beside its agent's terminal](preview.png)
+![Herdr with the chat beside its agent's terminal](screenshots/herdr-with-chat.png)
 
 *Herdr with the chat open: the spaces and agents on the left, a **Chat** button in the tab bar, and the chat beside its agent's terminal.*
 
