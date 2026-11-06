@@ -40,8 +40,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - **`@` file mentions**: type `@` and part of a name to pick a file or folder from the agent's project.
 - **Copy and edit messages**: hover a reply to copy it, or one of your messages to copy it or put it back in the box to change and send again.
 - **Search the conversation**: ⌘F (or **Search** in the header) shows only the messages that match.
-- **A context meter**: how full the session is, next to the model, with **Compact now** one click away.
-- **Permissions from the message box**: Claude's modes (Ask before edits, Accept edits, Plan, Auto, Bypass) or Codex's (Ask for approval, Approve for me, Full Access, Read Only), between the meter and the model.
+- **Permissions from the message box**: Claude's modes (Ask before edits, Accept edits, Plan, Auto, Bypass) or Codex's (Ask for approval, Approve for me, Full Access, Read Only), next to the model.
 - **Move to chat**: a Claude or Codex terminal you started yourself gets a **Move to chat** button in the tab bar that opens it as a chat.
 
 ## Install

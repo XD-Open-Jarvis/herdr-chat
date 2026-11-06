@@ -422,7 +422,6 @@ export default class Chat extends View {
           ...(skills.length > 3 ? [{ type: "sub", id: "skills", label: "All skills", icon: "scroll" }] : []),
           { type: "sep" },
           ...(this.models?.length ? [{ type: "sub", id: "model", label: "Model", icon: "model", detail: modelName(this.current().cat?.models, this.current().model) }] : []),
-          ...(this.t ? [{ type: "action", id: "compact", label: "Compact session", icon: "compact" }] : []),
           { type: "sep" },
           { type: "sub", id: "commands", label: "All commands", icon: "terminal" },
         ];
@@ -617,7 +616,6 @@ export default class Chat extends View {
     if (row.type === "model") { this.input.set_value(""); this.menuSub = null; this.applyModel(row.m.id, null, cx); return cx.notify(); }
     if (row.type === "session") { this.input.set_value(""); this.menuSub = null; this.deliverCommand(`/resume ${row.s.id}`, cx); return cx.notify(); }
     if (row.type === "mode") { this.input.set_value(""); this.menuSub = null; this.setMode(row.mode, cx); return cx.notify(); }
-    if (row.type === "action" && row.id === "compact") { this.input.set_value("/compact"); this.menuClosed = "/compact"; return this.send(cx); }
     const c = row.c;
     this.menuSub = null;
     this.input.set_value("");
@@ -1769,35 +1767,7 @@ export default class Chat extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.closeSearch(cx)).child("×"))));
   }
 
-  // How full the session's context is, left of the model: a small bar and a
-  // percentage; its menu shows the details or compacts the session.
-  contextMeter(t) {
-    const c = this.t?.context;
-    if (!c?.used) return div();
-    const model = this.current().model ?? "";
-    const window = c.window ?? (/claude-(opus|sonnet|haiku|fable)-5|\[1m\]/.test(model) ? 1e6 : this.current().kind === "claude" ? 2e5 : null);
-    if (!window) return div();
-    const pct = Math.min(100, Math.round((100 * c.used) / window));
-    const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : `${Math.round(n / 1e3)}k`);
-    const color = pct >= 85 ? t.blocked : pct >= 65 ? t.working : t.accent;
-    const run = (cmd) => (_e, cx) => { this.showContext = false; this.deliverCommand(cmd, cx); cx.notify(); };
-    const item = (id, text, action) => h_flex().id(id).px(10).py(6).rounded(6).cursor_pointer().text_size(12.5).hover((s) => s.bg(t.hover)).on_click(action).child(text);
-    const menu = v_flex().w(250).p(4).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg()
-      .child(div().px(10).pt(8).pb(2).text_size(12.5).font_semibold().child(`Context ${pct}% full`))
-      .child(div().px(10).pb(8).text_size(11.5).text_color(t.dim).child(`${k(c.used)} of ${k(window)} tokens. Claude compacts by itself when it's nearly full.`))
-      .child(item("ctx-details", "Show details", run(this.current().kind === "codex" ? "/status" : "/context")))
-      .child(item("ctx-compact", "Compact now", run("/compact")));
-    return Popover.new("context-menu").anchor("bottom_right").open(Boolean(this.showContext))
-      .on_open_change((open, cx) => { this.showContext = open; cx.notify(); })
-      .trigger(h_flex().id("context").flex_none().h(30).px(8).gap(6).items_center().rounded_full().cursor_pointer()
-        .tooltip(`Context: ${k(c.used)} of ${k(window)} tokens`)
-        .hover((s) => s.bg(t.hover))
-        .child(div().w(28).h(5).rounded(3).bg(t.raised).child(div().h_full().rounded(3).bg(color).w(`${Math.max(4, pct)}%`)))
-        .child(div().text_size(12).text_color(pct >= 85 ? t.blocked : t.muted).child(`${pct}%`)))
-      .content(menu);
-  }
-
-  // The permission mode, between the meter and the model: a button whose menu
+  // The permission mode, left of the model: a button whose menu
   // opens upward. The riskier modes show in the warning color.
   modeMenu(term, t) {
     const { kind, mode } = this.current();
@@ -1985,7 +1955,7 @@ export default class Chat extends View {
         .child(icon("attach", "+", (_e, cx) => this.pickFiles(cx)))
         .child(icon("emoji", "☺", (_e, cx) => { this.showEmoji = !this.showEmoji; cx.notify(); }, this.showEmoji))
         .child(div().flex_1())
-        .when(!this.dialog && Boolean(this.term), (el) => el.child(this.contextMeter(t)).child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
+        .when(!this.dialog && Boolean(this.term), (el) => el.child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
         .child(div().id("send").flex_none().size(32).rounded_full().flex().items_center().justify_center().cursor_pointer()
           .text_size(stop ? 12 : 16).font_semibold()
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)

@@ -24,13 +24,12 @@ The terminal stays one click away.
   - **While the agent works**: a spinner line ("Working…" or its own status) sits above the message box. The reply being written shows live, read from the terminal. So does the command or tool running now: a card with a spinner, its title (`Bash(npm test)`, `$ gh auth …`, `Running npm test`), its last 10 output lines and its elapsed time.
   - **Message box**: one card with rounded 18 px corners.
     - The text field grows from 1 to 10 rows.
-    - Under it: **+** (attach files), **☺** (emoji grid), the context meter, the permission mode button ("Auto mode ⌄", in the `blocked` color for Bypass permissions and Full Access), the model and effort button, and a round send button (■ while the agent works and the box is empty).
+    - Under it: **+** (attach files), **☺** (emoji grid), the permission mode button ("Auto mode ⌄", in the `blocked` color for Bypass permissions and Full Access), the model and effort button, and a round send button (■ while the agent works and the box is empty).
 - **The `/` menu**: a card above the message box.
   - **With only `/` typed** (420 px wide):
     - *Skills*: your top three by use.
     - *All skills ›*
     - *Model ›*, with the current model on the right.
-    - *Compact session*
     - *All commands ›*
   - **With a word typed**: one filtered list as wide as the message box. Each row shows a kind icon (app, built-in, skill, plugin, MCP), `/name`, the argument hint, the description, its aliases, and "picker" for commands whose terminal picker opens in the chat. A footer shows "N of M" and the keys.
 - **Command chips**: a picked command sits in the box as a blue `/name` chip. Its argument hint and description show under the text.
