@@ -18,10 +18,10 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 
 ## Install
 
-Ask the agent running in your Herdr: *"add the layout from github.com/&lt;owner&gt;/herdr-chat"*. Or do it by hand:
+Ask the agent running in your Herdr: *"add the layout from github.com/naruse/herdr-chat"*. Or do it by hand:
 
 ```sh
-git clone https://github.com/<owner>/herdr-chat
+git clone https://github.com/naruse/herdr-chat
 cd herdr-chat
 cp -R mods/* ~/.config/herdr-app/mods/
 cp layouts/chat.json ~/.config/herdr-app/layouts/
@@ -48,3 +48,7 @@ To keep your own layout instead, point its pane header at `chat-pane` and its ta
 | `mods/chat-tabs` | The tab bar with a **Chat** button |
 | `mods/spaces-chat` | The spaces sidebar with **New chat there** |
 | `layouts/chat.json` | Herdr's main layout, using the mods above |
+
+## License
+
+MIT, see [LICENSE](LICENSE).
