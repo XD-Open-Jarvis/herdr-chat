@@ -75,6 +75,29 @@ const modeOf = (screen) => /accept edits on/i.test(screen) ? "acceptEdits" : /pl
 // Hints a terminal shows while one of its pickers or panels is open.
 const DIALOG = /(esc to (cancel|close|exit|go back|dismiss)|enter to (select|confirm|continue|save|apply)|to navigate|↑\/↓|↑↓|(?<!shift\+)tab to switch|space to (toggle|select)|press esc|esc back|enter continue|\besc close\b)/i;
 
+// A reply cut into markdown and fenced code blocks: [{ md } | { code, lang, fence }].
+// Fences may be indented (a block inside a list item); its lines lose that indent.
+function splitCode(text) {
+  const lines = text.split("\n");
+  const out = [];
+  let md = [];
+  for (let i = 0; i < lines.length; i++) {
+    const open = /^(\s{0,6})(`{3,}|~{3,})\s*([\w+.-]*)\s*$/.exec(lines[i]);
+    if (!open) { md.push(lines[i]); continue; }
+    const [, indent, fence, lang] = open;
+    let j = i + 1;
+    while (j < lines.length && !new RegExp(`^\\s{0,6}${fence[0] === "`" ? "`" : "~"}{${fence.length},}\\s*$`).test(lines[j])) j++;
+    if (j >= lines.length) { md.push(lines[i]); continue; }
+    if (md.join("").trim()) out.push({ md: md.join("\n") });
+    md = [];
+    const code = lines.slice(i + 1, j).map((l) => (l.startsWith(indent) ? l.slice(indent.length) : l.trimStart())).join("\n");
+    out.push({ code, lang, fence });
+    i = j;
+  }
+  if (md.join("").trim() || !out.length) out.push({ md: md.join("\n") });
+  return out;
+}
+
 // A Codex rollout file's thread id.
 const threadOf = (file) => /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(file ?? "")?.[1] ?? null;
 
@@ -248,6 +271,41 @@ export default class Chat extends View {
       this.running = null;
       cx.notify();
     });
+  }
+
+  // A reply: its markdown, with each code block drawn on its own so it gets
+  // a Copy button and a Play button (put it in the message box to send).
+  reply(e, t) {
+    const parts = splitCode(e.text ?? "");
+    if (parts.length === 1 && parts[0].md != null) return div().w_full().child(this.markdown(e.key, e.text));
+    return v_flex().w_full().gap(8).children(parts.map((p, n) => {
+      if (p.md != null) return div().w_full().child(this.markdown(`${e.key}-${n}`, p.md));
+      const id = `${e.key}-${n}`;
+      const done = this.copied === id;
+      const btn = (name, icon, tip, action) => div().id(`${name}-${id}`).size(26).flex().items_center().justify_center().rounded(6)
+        .cursor_pointer().bg(t.background).border_1().border_color(t.border).text_color(t.muted)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(action)
+        .child(svg(`mods/chat/icons/${icon}.svg`).size(13));
+      return div().w_full().relative()
+        .child(this.markdown(id, `${p.fence}${p.lang}\n${p.code}\n${p.fence}`))
+        .child(h_flex().absolute().top(6).right(6).gap(4)
+          .child(btn("copy", done ? "check" : "copy", done ? "Copied" : "Copy", (_e, cx) => {
+            cx.spawn(async (cx) => {
+              if (!(await copyText(p.code))) return notify({ title: "No clipboard tool", body: "Install wl-clipboard or xclip to copy", level: "warning", timeout: 4000 });
+              this.copied = id;
+              cx.notify();
+              await exec("sh", ["-c", "sleep 1.5"]);
+              if (this.copied === id) { this.copied = null; cx.notify(); }
+            });
+          }))
+          .child(btn("play", "play", "Put in the message box", (_e, cx) => {
+            this.input.set_value("");
+            this.input.replace(p.code);
+            this.input.focus();
+            cx.notify();
+          })));
+    }));
   }
 
   // The command or tool running now, with its output so far, as the terminal
@@ -1279,7 +1337,7 @@ export default class Chat extends View {
           .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 280, 200)))))
           .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))));
     }
-    if (e.kind === "assistant") return div().w_full().child(this.markdown(e.key, e.text));
+    if (e.kind === "assistant") return this.reply(e, t);
     if (e.kind === "card") return this.card(e, t);
     // What a slash command printed, as the terminal shows it.
     if (e.kind === "output") {
