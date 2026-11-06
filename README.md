@@ -8,13 +8,14 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - replies that stream as they're written;
 - Slack-style `:emoji` autocomplete.
 
-![The chat with its command menu](preview.png)
+![The chat with its / command menu](preview.png)
 
 | | |
 |---|---|
-| ![Command search](screenshots/2-command-search.png) | ![Side chat](screenshots/3-side-chat.png) |
-| ![Context card](screenshots/4-context-card.png) | ![A terminal picker inside the chat](screenshots/5-terminal-picker.png) |
-| ![Emoji autocomplete](screenshots/6-emoji.png) | ![The / menu](screenshots/1-command-menu.png) |
+| ![Searching commands](screenshots/command-search.png)<br>**Commands** with their descriptions, arguments and aliases | ![Side chat](screenshots/side-chat.png)<br>**Side chat**: ask without interrupting the agent |
+| ![A command running](screenshots/live-command.png)<br>**Live progress**: the command running now and its output | ![Context card](screenshots/context-card.png)<br>**Cards** for context, usage, MCP servers, memory |
+| ![A terminal picker in the chat](screenshots/terminal-picker.png)<br>**Terminal pickers** as buttons, right in the chat | ![Model picker](screenshots/model-picker.png)<br>**Pick, don't type**: models, sessions, permission modes |
+| ![Chat and terminal side by side](screenshots/chat-and-terminal.png)<br>**The terminal** is one click away | ![Emoji](screenshots/emoji.png)<br>**`:emoji`** autocomplete, like Slack |
 
 ## What the chat does that the terminal can't
 
