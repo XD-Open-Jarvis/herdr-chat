@@ -235,7 +235,9 @@ export default class Chat extends View {
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
         const now = r ? live(r.stdout, kind) : null;
         const text = now?.kind === "text" ? now.text : null;
-        const run = now?.kind === "run" ? now : null;
+        // Between steps the screen shows neither: keep the last command's card
+        // rather than drop it and bring one back (the page would jump).
+        const run = now?.kind === "run" ? now : now?.kind === "text" ? null : this.running;
         if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
         await exec("sh", ["-c", "sleep 0.35"]);
       }
@@ -251,15 +253,17 @@ export default class Chat extends View {
   runningView(t) {
     const r = this.running;
     const mono = settings().font_family;
-    const out = r.out.slice(-10);
+    // Always the same height, its lines never wrapping: the page doesn't move.
+    const LINES = 6, LH = 17;
+    const out = r.out.slice(-LINES);
     return v_flex().w_full().gap(6).px(12).py(9).rounded(10).border_1().border_color(t.border).bg(t.surface)
-      .child(h_flex().gap(8).items_center()
+      .child(h_flex().h(20).gap(8).items_center()
         .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_medium().when(Boolean(mono), (d) => d.font_family(mono)).child(r.title))
         .when(Boolean(r.time), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(r.time))))
-      .when(out.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.muted)
-        .when(Boolean(mono), (d) => d.font_family(mono))
-        .child(this.markdown("running-out", "~~~~text\n" + out.join("\n") + "\n~~~~"))));
+      .child(v_flex().h(LINES * LH + 12).px(10).py(6).rounded(6).bg(t.background).overflow_hidden().justify_end()
+        .text_size(11.5).text_color(t.muted).when(Boolean(mono), (d) => d.font_family(mono))
+        .children(out.map((l) => div().h(LH).flex_none().truncate().child(l || " "))));
   }
 
   // The streamed reply, unless the log already has it.
