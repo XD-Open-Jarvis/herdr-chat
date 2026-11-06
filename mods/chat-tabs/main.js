@@ -54,8 +54,8 @@ export default class Tabs extends View {
   }
 
   // The Chat button: the chat for the shown tab's agent. With none yet, opens
-  // one beside the agent's terminal (the focused one first) and zooms it;
-  // otherwise toggles between the chat alone and the chat beside the terminal.
+  // one beside the agent's terminal (the focused one first) and zooms it, and
+  // reads "Move to chat"; otherwise toggles between the chat alone and the chat beside the terminal.
   chatIn(tab) {
     const inTab = panes().filter((p) => p.tab === tab?.id);
     return {
@@ -68,13 +68,15 @@ export default class Tabs extends View {
     const { chat, agent } = this.chatIn(tab);
     if (chat) return run("pane.zoom", { pane: chat.pane });
     if (!agent) return notify({ title: "No agent in this tab", body: "Chat works with Claude Code and Codex terminals.", level: "info" });
+    run("pane.split", { direction: "right", pane: agent.pane, mod: "chat", props: { terminal: agent.terminal } });
+    // run() gives no pane id: zoom the chat once it's in the tab.
     cx.spawn(async () => {
-      // Through the CLI for the new pane's id (run() returns none).
-      const r = await exec("sh", ["-c", 'H=$(command -v herdr-app || echo "$HOME/.local/bin/herdr-app"); exec "$H" do "$1" "$2"', "sh", "pane.split", JSON.stringify({ direction: "right", pane: agent.pane, mod: "chat", props: { terminal: agent.terminal } })]);
-      let out = null;
-      try { out = JSON.parse(r.stdout); } catch {}
-      if (out?.pane) run("pane.zoom", { pane: out.pane });
-      else notify({ title: "Couldn't open the chat", body: out?.error ?? r.stderr.trim(), level: "error" });
+      for (let i = 0; i < 20; i++) {
+        await exec("sh", ["-c", "sleep 0.1"]);
+        const { chat } = this.chatIn(tab);
+        if (chat) return run("pane.zoom", { pane: chat.pane });
+      }
+      notify({ title: "Couldn't open the chat", body: "The chat pane didn't appear", level: "error" });
     });
   }
 
@@ -125,11 +127,14 @@ export default class Tabs extends View {
     const tab = shown.find((c) => c.active);
     const { chat, agent } = this.chatIn(tab);
     const chatOn = Boolean(chat?.zoomed);
+    // A Claude or Codex terminal without a chat yet: the button says it moves it into one.
+    const move = Boolean(agent && !chat);
     const chatButton = h_flex().id("panel-chat").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
-      .text_size(12).bg(chatOn ? t.selected : t.chrome).text_color(chatOn ? t.foreground : chat || agent ? t.muted : t.dim)
+      .text_size(12).bg(chatOn ? t.selected : t.chrome).text_color(chatOn ? t.foreground : move ? t.accent : chat ? t.muted : t.dim)
+      .when(move, el => el.border_1().border_color(t.accent))
       .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
       .on_click((_e, cx) => this.openChat(tab, cx))
-      .child(svg("mods/chat-tabs/chat.svg").size(14)).child("Chat");
+      .child(svg("mods/chat-tabs/chat.svg").size(14)).child(move ? "Move to chat" : "Chat");
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })

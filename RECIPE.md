@@ -24,7 +24,7 @@ The terminal stays one click away.
   - **While the agent works**: a spinner line ("Working…" or its own status) sits above the message box. The reply being written shows live, read from the terminal. So does the command or tool running now: a card with a spinner, its title (`Bash(npm test)`, `$ gh auth …`, `Running npm test`), its last 10 output lines and its elapsed time.
   - **Message box**: one card with rounded 18 px corners.
     - The text field grows from 1 to 10 rows.
-    - Under it: **+** (attach files), **☺** (emoji grid), the model and effort button, and a round send button (■ while the agent works and the box is empty).
+    - Under it: **+** (attach files), **☺** (emoji grid), the context meter, the permission mode button ("Auto mode ⌄", in the `blocked` color for Bypass permissions and Full Access), the model and effort button, and a round send button (■ while the agent works and the box is empty).
 - **The `/` menu**: a card above the message box.
   - **With only `/` typed** (420 px wide):
     - *Skills*: your top three by use.
@@ -35,7 +35,7 @@ The terminal stays one click away.
   - **With a word typed**: one filtered list as wide as the message box. Each row shows a kind icon (app, built-in, skill, plugin, MCP), `/name`, the argument hint, the description, its aliases, and "picker" for commands whose terminal picker opens in the chat. A footer shows "N of M" and the keys.
 - **Command chips**: a picked command sits in the box as a blue `/name` chip. Its argument hint and description show under the text.
 - **Side chat**: a pane on the right of the conversation, 300–420 px wide.
-  - Its header has "Side chat ⌘;", **Clear** and **×**.
+  - Its header has "Side chat ⌘;" (Ctrl+; on Linux and Windows), **Clear** and **×**.
   - Questions are bubbles; answers are markdown.
   - It has its own message box: "Ask about this conversation…".
 - **Cards**: 620 px wide, `surface` background, with rounded 12 px corners.
@@ -50,9 +50,9 @@ The terminal stays one click away.
 - **Emoji menu**: a 380 px card titled `Emoji matching ":tad"`, with 8 rows of an emoji plus its `:name:`.
 - **File editor** (`chat-file`): an 820×600 dialog with the file's name and path, **Close** and **Save** (⌘S), and a code editor.
 - **Elsewhere**:
-  - The tab bar (`chat-tabs`) gets a **Chat** button next to Files and Changes.
+  - The tab bar (`chat-tabs`) gets a **Chat** button next to Files and Changes. While the shown tab has a Claude or Codex terminal and no chat yet, it reads **Move to chat**, in the `accent` color with an `accent` border.
   - The spaces sidebar (`spaces-chat`) gets **New chat there** buttons.
-  - ⌘N opens the New chat form: pick the agent, folder, model and effort, then Start.
+  - ⌘N (Ctrl+N on Linux and Windows) opens the New chat form: pick the agent, folder, model and effort, then Start.
 
 ## How it behaves
 
@@ -71,7 +71,9 @@ The terminal stays one click away.
   - `/btw` and `/side` open the side chat.
   - `/model` (with nothing after it) opens the model submenu; `/effort` opens the model button's menu.
   - `/resume` lists earlier sessions in this folder and sends `/resume <id>`.
-  - `/permissions` (Claude) lists the modes and presses shift+tab in the terminal until its footer shows the one picked.
+  - `/permissions` and the permission mode button list the modes, ✓ on the current one:
+    - Claude: Ask before edits, Accept edits, Plan mode, Auto mode, Bypass permissions. Picking one presses shift+tab in the terminal until its footer shows it. The current mode is the footer's, else the log's `permissionMode`.
+    - Codex: Ask for approval, Approve for me, Full Access, Read Only. Picking one sends `/permissions` and presses the number in front of that row. The current one comes from the log's `turn_context` (`sandbox_policy`, `approvals_reviewer`). While Codex works, the rows are greyed out.
   - `/status`, `/usage` (`/cost`, `/stats`), `/memory` (`/memories`), `/hooks`, `/mcp`, `/skills`, `/plugin` (`/plugins`) and `/config` (`/settings`) show cards.
   - `/help` opens All commands. `/diff` opens Herdr's Changes panel. `/copy [N]` copies a reply.
 - **Every other command** goes to the agent as typed.
@@ -79,7 +81,7 @@ The terminal stays one click away.
   - While the message box is empty, the arrows, Tab, Enter and Esc go to the picker.
 - **Side chat**:
   - Each question is answered from a read-only copy of the conversation. Follow-ups carry the earlier questions and answers.
-  - ⌘; opens or closes the side chat.
+  - ⌘; (Ctrl+; on Linux and Windows) opens or closes the side chat. ⌘F (Ctrl+F) searches.
   - It shows "Thinking…" while waiting, and an error line if there's no answer.
 - **Emoji**:
   - `:` plus two letters, at the start or after a space, opens the menu. Slack's names come first, then Unicode names matched by any word.
@@ -126,9 +128,9 @@ The terminal stays one click away.
   - `python3`, `claude` and/or `codex`, `sh`.
   - For the desktop: `pbcopy` and `osascript` (macOS); `wl-copy`, `xclip`, `xsel` or KDE Klipper over `qdbus`, `kdialog` or `zenity`, and `xdg-open` (Linux).
 - **`mods/chat-pane`**: a copy of the shipped `pane` header whose × asks before ending an agent. Its method is called `closePane`, not `close`.
-- **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Chat button. It splits a chat pane to the right of the tab's agent and zooms it.
+- **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Chat button. It splits a chat pane to the right of the tab's agent with `run("pane.split")`, then zooms it once it shows up in `panes()`.
 - **`mods/spaces-chat`**: a copy of the shipped `spaces` sidebar whose + opens the New chat form.
-- **`keys.json`**: `cmd-n` → `mod.open:chat`.
+- **`keys.json`** (macOS): `cmd-n` → `mod.open:chat`. **`keys.linux-windows.json`**: `ctrl-n` → `mod.open:chat`.
 
 ## Watch out
 
@@ -140,6 +142,8 @@ The terminal stays one click away.
 - **Claude Code doesn't log `/btw` answers**, and newer versions log slash commands as `system/local_command`, not user messages.
 - **Messages sent mid-turn** are logged as `queued_command` attachments.
 - **Claude Code's permission modes cycle with shift+tab**: manual → accept edits → plan → auto. The footer names the mode ("manual mode on" is the default).
+- **`cmd` in `cx.bind_keys` is the Windows key on Linux and Windows.** Bind `ctrl-` there instead (`window().platform`).
+- **Codex's `/permissions` list** takes the row's number as the pick. Older versions name the presets Read Only, Auto (or Default) and Full Access.
 - **`hc send` from inside an agent's terminal wraps the text in `<hc from=…>`**, so commands sent that way aren't commands. The mod's own sends aren't wrapped.
 - **Big app-server replies** (`plugin/list` is about 400 KB) break `exec` output: trim them in the helper.
 - **Pickers mark the current choice with ✔ in the indent.** Some draw their top border with `▔`, not `─`.
@@ -149,7 +153,7 @@ The terminal stays one click away.
 ## Done when
 
 - `herdr-app check` passes for `chat`, `chat-file`, `chat-pane`, `chat-tabs` and `spaces-chat`.
-- **Basics**: ⌘N, Start → a new space with the chat zoomed over a fresh agent, and the folder-trust question answered by itself. Sending a message shows it at once and the reply as it's written.
+- **Basics**: ⌘N (Ctrl+N on Linux), Start → a new space with the chat zoomed over a fresh agent, and the folder-trust question answered by itself. Sending a message shows it at once and the reply as it's written.
 - **`/` menu**:
   - Typing `/` shows *Skills*, *Model ›* and *All commands ›*.
   - `/co` filters the list; ↓ moves; Tab puts a `/compact` chip in the box; Enter sends it.
@@ -158,7 +162,8 @@ The terminal stays one click away.
   - `/context` shows the context card.
   - `/status` and `/usage` show cards for both Claude and Codex.
   - `/model` lists the models with ✓ on the current one; picking another switches the agent.
-  - `/permissions` → Plan mode turns the terminal's footer to "plan mode on".
+  - `/permissions` → Plan mode turns the terminal's footer to "plan mode on", and the permission button reads "Plan mode".
+  - In a Codex chat, the permission button → Read Only, then `/permissions` in the terminal marks "Read Only (current)".
   - `/resume` lists earlier sessions.
   - `/memory` → Open shows the file in the editor dialog.
 - **Terminal pickers**: `/theme` shows the theme picker in the chat; ↓ moves its highlight in the terminal; Esc closes both.

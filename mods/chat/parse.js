@@ -165,6 +165,8 @@ export class Transcript {
       return;
     }
     if (d.type === "ai-title" && d.aiTitle) this.title = d.aiTitle;
+    // Each message logs the permission mode it was sent in.
+    if (d.type === "user" && d.permissionMode) this.mode = d.permissionMode;
     if (d.type === "system" && d.subtype === "compact_boundary") {
       // Until the next reply says exactly, the summary plus what every request carries.
       // Never more than before compacting.
@@ -232,6 +234,9 @@ export class Transcript {
     if (d.type === "turn_context") {
       this.model = p.model ?? this.model;
       this.effort = p.effort ?? p.collaboration_mode?.settings?.reasoning_effort ?? this.effort;
+      // Which of /permissions' presets this turn ran with.
+      const box = p.sandbox_policy?.type;
+      if (box) this.mode = box === "read-only" ? "read" : box === "danger-full-access" ? "full" : p.approvals_reviewer === "auto_review" ? "auto" : "ask";
       return;
     }
     if (d.type === "event_msg" && p.type === "turn_aborted") return this.note("Interrupted");

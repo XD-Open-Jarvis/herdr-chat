@@ -8,6 +8,7 @@ import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, InputState,
 import {
   exec, hc, run, props, terminals, panes, spaces, theme, settings, appHome, home,
   watchFolder, nextCommand, pickFolder, shared, setShared, closeOverlay, machines, openOverlay, notify,
+  window as appWindow,
 } from "herdr";
 import * as fs from "fs/promises";
 import { Buffer } from "buffer";
@@ -69,6 +70,17 @@ const MODES = [
   { id: "auto", label: "Auto mode", desc: "Claude decides what's safe to run without asking" },
   { id: "bypassPermissions", label: "Bypass permissions", desc: "Nothing asks first" },
 ];
+// Codex's /permissions presets, with the names older versions gave them.
+const CODEX_MODES = [
+  { id: "ask", label: "Ask for approval", desc: "Works in this folder; asks for the internet or anything outside it", match: /^(Ask for approval|Default|Auto)\b/ },
+  { id: "auto", label: "Approve for me", desc: "Only asks for actions that look unsafe", match: /^Approve for me\b/ },
+  { id: "full", label: "Full Access", desc: "Edits anywhere and uses the internet without asking", match: /^Full Access\b/ },
+  { id: "read", label: "Read Only", desc: "Reads files; asks before any edit or the internet", match: /^Read Only\b/ },
+];
+const modesOf = (kind) => (kind === "codex" ? CODEX_MODES : MODES);
+// Shortcuts: ⌘ on macOS, Ctrl on Linux and Windows.
+const MAC = (() => { try { return appWindow().platform === "macos"; } catch { return true; } })();
+const shortcut = (key) => (MAC ? `⌘${key}` : `Ctrl+${key}`);
 const modeOf = (screen) => /accept edits on/i.test(screen) ? "acceptEdits" : /plan mode on/i.test(screen) ? "plan"
   : /auto mode on/i.test(screen) ? "auto" : /bypass permissions on/i.test(screen) ? "bypassPermissions" : "default";
 
@@ -170,8 +182,8 @@ export default class Chat extends View {
         { keystroke: "down", action: "chat_menu_down", context: "ChatMenuNav > Input" },
         { keystroke: "left", action: "chat_menu_left", context: "ChatMenuNav > Input" },
         { keystroke: "right", action: "chat_menu_right", context: "ChatMenuNav > Input" },
-        { keystroke: "cmd-;", action: "chat_side_toggle", context: "ChatRoot" },
-        { keystroke: "cmd-f", action: "chat_search", context: "ChatRoot" },
+        { keystroke: MAC ? "cmd-;" : "ctrl-;", action: "chat_side_toggle", context: "ChatRoot" },
+        { keystroke: MAC ? "cmd-f" : "ctrl-f", action: "chat_search", context: "ChatRoot" },
         { keystroke: "escape", action: "chat_search_close", context: "ChatSearch" },
         { keystroke: "escape", action: "chat_menu_escape", context: "ChatPanel > Input" },
         { keystroke: "escape", action: "chat_menu_escape", context: "ChatMenu > Input" },
@@ -402,7 +414,7 @@ export default class Chat extends View {
       else if (this.menuSub === "model") rows = [{ type: "back", label: "Model" }, ...(this.models ?? []).map((md) => ({ type: "model", m: md }))];
       else if (this.menuSub === "resume") rows = [{ type: "back", label: "Resume a conversation" },
         ...(this.sessions ?? []).map((x) => ({ type: "session", s: x }))];
-      else if (this.menuSub === "permissions") rows = [{ type: "back", label: "Permission mode" }, ...MODES.map((x) => ({ type: "mode", mode: x }))];
+      else if (this.menuSub === "permissions") rows = [{ type: "back", label: "Permission mode" }, ...modesOf(this.current().kind).map((x) => ({ type: "mode", mode: x }))];
       else {
         const top = [...skills].sort((x, y) => (this.usage[y.name] ?? 0) - (this.usage[x.name] ?? 0)).slice(0, 3);
         rows = [
@@ -637,9 +649,8 @@ export default class Chat extends View {
       else notify({ title: "Nothing to copy yet", timeout: 2000 });
       return clear();
     }
-    if (cmd.action === "permissions" && !args && this.current().kind === "claude") {
-      this.menuMode = null;
-      cx.spawn(async (cx) => { this.menuMode = modeOf((await hc(["read", this.term, "--lines", "3"])).stdout); cx.notify(); });
+    if (cmd.action === "permissions" && !args && this.current().kind) {
+      this.readMode(cx);
       return this.openSub("permissions");
     }
     if (cmd.action === "resume" && !args && this.current().kind) {
@@ -676,17 +687,45 @@ export default class Chat extends View {
     cx.spawn(async (cx) => this.deliver(text, [], cx));
   }
 
-  // Claude Code switches permission mode with shift+tab, in a cycle: press it
-  // until the terminal's footer shows the mode picked.
-  setMode(mode, cx) {
+  // Claude Code shows its permission mode in its footer; Codex's is what the
+  // log last said.
+  readMode(cx) {
+    if (this.current().kind !== "claude") return;
     cx.spawn(async (cx) => {
+      const r = await hc(["read", this.term, "--lines", "3"]).catch(() => null);
+      if (r) { this.mode = { id: modeOf(r.stdout), logged: this.t?.mode }; cx.notify(); }
+    });
+  }
+
+  // Claude Code switches permission mode with shift+tab, in a cycle: press it
+  // until the terminal's footer shows the mode picked. Codex picks one from its
+  // /permissions list, by the number in front of it.
+  setMode(mode, cx) {
+    const kind = this.current().kind;
+    this.mode = { id: mode.id, logged: this.t?.mode };
+    cx.spawn(async (cx) => {
+      const sleep = (s) => exec("sh", ["-c", `sleep ${s}`]);
+      if (kind === "codex") {
+        await hc(["send", this.term, "/permissions"]);
+        for (let i = 0; i < 15; i++) {
+          await sleep(0.3);
+          const lines = (await hc(["read", this.term, "--lines", "20"])).stdout.split("\n");
+          const row = lines.map((l) => /^\s*(?:›\s*)?(\d)\.\s+(.*)$/.exec(l)).find((m) => m && mode.match.test(m[2]));
+          if (row) { await hc(["keys", this.term, row[1]]); return cx.notify(); }
+        }
+        await hc(["keys", this.term, "esc"]);
+        this.mode = null;
+        notify({ title: `Codex didn't offer ${mode.label}`, body: "Pick it with /permissions in its terminal", level: "warning", timeout: 5000 });
+        return cx.notify();
+      }
       for (let i = 0; i < 6; i++) {
         const screen = (await hc(["read", this.term, "--lines", "3"])).stdout;
         if (modeOf(screen) === mode.id) break;
         await hc(["keys", this.term, "shift+tab"]);
-        await exec("sh", ["-c", "sleep 0.35"]);
+        await sleep(0.35);
       }
-      cx.notify();
+      // Not every mode is in the cycle (bypass needs a flag at launch): say where it ended up.
+      this.readMode(cx);
     });
   }
 
@@ -906,7 +945,7 @@ export default class Chat extends View {
     return v_flex().id("side").flex_none().w(w).h_full().border_l(1).border_color(t.border).bg(t.background)
       .child(h_flex().h(34).px(12).gap(8).items_center().border_b(1).border_color(t.border).bg(t.chrome).text_size(12)
         .child(div().font_semibold().child("Side chat"))
-        .child(div().flex_1().text_color(t.dim).child("⌘;"))
+        .child(div().flex_1().text_color(t.dim).child(shortcut(";")))
         .when(S.items.length > 0, (el) => el.child(div().id("side-clear").px(6).py(2).rounded(5).cursor_pointer().text_color(t.muted)
           .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { S.items = []; S.off = 0; cx.notify(); }).child("Clear")))
         .child(div().id("side-close").px(6).py(2).rounded(5).cursor_pointer().text_color(t.muted)
@@ -1372,6 +1411,8 @@ export default class Chat extends View {
       kind, cat,
       model: this.chosen?.model ?? logged ?? cat?.model,
       effort: this.chosen?.effort ?? this.t?.effort ?? cat?.effort,
+      // A pick here holds until the log reports a mode of its own.
+      mode: (this.mode && this.mode.logged === this.t?.mode ? this.mode.id : null) ?? this.t?.mode ?? (kind === "claude" ? "default" : null),
     };
   }
 
@@ -1756,6 +1797,33 @@ export default class Chat extends View {
       .content(menu);
   }
 
+  // The permission mode, between the meter and the model: a button whose menu
+  // opens upward. The riskier modes show in the warning color.
+  modeMenu(term, t) {
+    const { kind, mode } = this.current();
+    if (!kind) return div();
+    const modes = modesOf(kind);
+    const now = modes.find((m) => m.id === mode);
+    const risky = mode === "bypassPermissions" || mode === "full";
+    const busy = kind === "codex" && term?.status === "working";
+    const item = (m) => h_flex().id(`pm-${m.id}`).px(10).py(5).gap(8).rounded(6).text_size(12.5).text_color(busy ? t.dim : t.foreground)
+      .when(!busy, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.showModes = false; this.setMode(m, cx); cx.notify(); }))
+      .child(div().w(12).flex_none().text_color(t.accent).child(m.id === mode ? "✓" : ""))
+      .child(v_flex().flex_1().min_w(0).child(div().child(m.label)).child(div().text_size(11).text_color(t.dim).child(m.desc)));
+    const menu = v_flex().w(300).p(4).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg()
+      .child(div().px(10).pt(8).pb(4).text_size(11).font_semibold().text_color(t.dim).child("Permissions"))
+      .children(modes.map(item))
+      .when(busy, (el) => el.child(div().px(10).py(6).text_size(11).text_color(t.dim).child("Codex can switch once it stops working.")));
+    return Popover.new("mode-menu").anchor("bottom_right").open(Boolean(this.showModes))
+      .on_open_change((open, cx) => { this.showModes = open; if (open) this.readMode(cx); cx.notify(); })
+      .trigger(div().id("mode").flex_none().h(30).px(10).flex().items_center().gap(5).rounded_full().cursor_pointer().text_size(12.5)
+        .when(Boolean(this.showModes), (el) => el.bg(t.hover))
+        .text_color(risky ? t.blocked : this.showModes ? t.foreground : t.muted)
+        .hover((s) => s.bg(t.hover).text_color(risky ? t.blocked : t.foreground))
+        .child(div().child(now?.label ?? "Permissions")).child(div().text_color(t.dim).text_size(10).child("⌄")))
+      .content(menu);
+  }
+
   // The model and effort of the running session: a button in the message bar
   // whose menu opens upward.
   modelMenu(term, t) {
@@ -1917,7 +1985,7 @@ export default class Chat extends View {
         .child(icon("attach", "+", (_e, cx) => this.pickFiles(cx)))
         .child(icon("emoji", "☺", (_e, cx) => { this.showEmoji = !this.showEmoji; cx.notify(); }, this.showEmoji))
         .child(div().flex_1())
-        .when(!this.dialog && Boolean(this.term), (el) => el.child(this.contextMeter(t)).child(this.modelMenu(term, t)))
+        .when(!this.dialog && Boolean(this.term), (el) => el.child(this.contextMeter(t)).child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
         .child(div().id("send").flex_none().size(32).rounded_full().flex().items_center().justify_center().cursor_pointer()
           .text_size(stop ? 12 : 16).font_semibold()
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)
@@ -1974,7 +2042,7 @@ export default class Chat extends View {
         .child(div().flex_1().min_w(0).truncate().text_size(13).child(r.s.title))
         .child(div().flex_none().text_size(12).text_color(t.dim).child(r.s.when));
       if (r.type === "mode") {
-        const now = this.menuMode;
+        const now = this.current().mode;
         return shell(`menu-p-${r.mode.id}`, i).on_click((_e, cx) => this.choose(r, cx))
           .child(div().w(14).flex_none().text_color(t.accent).child(now === r.mode.id ? "✓" : ""))
           .child(div().flex_none().text_size(13).child(r.mode.label))
@@ -2027,7 +2095,7 @@ export default class Chat extends View {
     const term = this.term ? this.terminal() : null;
     if (!this.dialog && !this.term) {
       return v_flex().id("root").size_full().bg(t.background).items_center().justify_center().text_color(t.dim)
-        .child("No agent here. Press ⌘N for a new chat.");
+        .child(`No agent here. Press ${shortcut("N")} for a new chat.`);
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(13)
       .key_context("ChatRoot")

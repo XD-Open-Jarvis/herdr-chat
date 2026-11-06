@@ -14,7 +14,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 
 | | |
 |---|---|
-| ![New chat](screenshots/new-chat.png)<br>**New chat** (⌘N): pick the agent, machine, folder, model and effort | ![The / menu](screenshots/command-menu.png)<br>**The `/` menu**: skills, the model and all commands |
+| ![New chat](screenshots/new-chat.png)<br>**New chat** (⌘N, or Ctrl+N on Linux and Windows): pick the agent, machine, folder, model and effort | ![The / menu](screenshots/command-menu.png)<br>**The `/` menu**: skills, the model and all commands |
 | ![Searching commands](screenshots/command-search.png)<br>**Commands** with their descriptions, arguments and aliases | ![Side chat](screenshots/side-chat.png)<br>**Side chat**: ask without interrupting the agent |
 | ![A command running](screenshots/live-command.png)<br>**Live progress**: the command running now and its output | ![Context card](screenshots/context-card.png)<br>**Cards** for context, usage, MCP servers, memory |
 | ![A terminal picker in the chat](screenshots/terminal-picker.png)<br>**Terminal pickers** as buttons, right in the chat | ![Model picker](screenshots/model-picker.png)<br>**Pick, don't type**: models, sessions, permission modes |
@@ -41,6 +41,8 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - **Copy and edit messages**: hover a reply to copy it, or one of your messages to copy it or put it back in the box to change and send again.
 - **Search the conversation**: ⌘F (or **Search** in the header) shows only the messages that match.
 - **A context meter**: how full the session is, next to the model, with **Compact now** one click away.
+- **Permissions from the message box**: Claude's modes (Ask before edits, Accept edits, Plan, Auto, Bypass) or Codex's (Ask for approval, Approve for me, Full Access, Read Only), between the meter and the model.
+- **Move to chat**: a Claude or Codex terminal you started yourself gets a **Move to chat** button in the tab bar that opens it as a chat.
 
 ## Install
 
@@ -54,7 +56,7 @@ cp layouts/chat.json ~/.config/herdr-app/layouts/
 herdr-app do layout.switch '{"name":"chat"}'
 ```
 
-Then merge `keys.json` into `~/.config/herdr-app/keys.json` (it binds ⌘N to New chat).
+Then merge the keys into `~/.config/herdr-app/keys.json`: `keys.json` on macOS (⌘N for New chat), `keys.linux-windows.json` on Linux and Windows (Ctrl+N). Ctrl+N then no longer reaches terminal programs, where shells use it for the next history line.
 
 **Requirements:**
 - `python3`, and `claude` and/or `codex`, on the machine where the agents run.
@@ -74,6 +76,7 @@ To keep your own layout instead, point its pane header at `chat-pane` and its ta
 | `mods/chat-tabs` | The tab bar with a **Chat** button |
 | `mods/spaces-chat` | The spaces sidebar with **New chat there** |
 | `layouts/chat.json` | Herdr's main layout, using the mods above |
+| `keys.json`, `keys.linux-windows.json` | New chat on ⌘N (macOS) or Ctrl+N (Linux and Windows) |
 
 ## License
 

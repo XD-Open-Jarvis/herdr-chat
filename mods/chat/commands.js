@@ -246,7 +246,7 @@ async function claudeCommands(folder, on) {
 // Codex's commands the chat answers itself, as the ChatGPT app does.
 const CODEX_HOST = {
   side: { action: "side", aliases: ["btw"], desc: "Ask a side question without interrupting the main chat", hint: "[question]" },
-  model: { action: "model" }, resume: { action: "resume" }, status: { action: "status" }, usage: { action: "usage" },
+  model: { action: "model" }, resume: { action: "resume" }, status: { action: "status" }, usage: { action: "usage" }, permissions: { action: "permissions" },
   memories: { action: "memory", desc: "See and edit what Codex remembers (AGENTS.md files)" },
   hooks: { action: "hooks" }, mcp: { action: "mcp", desc: "See MCP servers and their tools" }, skills: { action: "skills", desc: "See the skills Codex can use" },
   plugins: { action: "plugins" }, settings: { action: "config", desc: "See and edit Codex's settings" },
