@@ -16,6 +16,22 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 | ![Context card](screenshots/4-context-card.png) | ![A terminal picker inside the chat](screenshots/5-terminal-picker.png) |
 | ![Emoji autocomplete](screenshots/6-emoji.png) | ![The / menu](screenshots/1-command-menu.png) |
 
+## What the chat does that the terminal can't
+
+- **Images, shown right in the conversation**:
+  - **Yours**: attach them with **+**, drag them onto the chat, or paste a screenshot with ⌘V.
+  - **The agent's**: images it reads or makes appear in its tool results, like screenshots it takes or diagrams it renders.
+  - Click any image to open it full size.
+- **Files by drag and drop**: drop any file on the chat to attach it. On another machine, it's copied there first.
+- **Formatted replies**: markdown with headings, lists, tables and code blocks, and text you can select and copy. Replies are formatted while they stream, too.
+- **Tool calls folded away**: a turn's tool calls collapse into one line ("4 tool calls · Bash, Read, Edit"). Click it to see each call with its output and any images.
+- **Questions as buttons**: when the agent asks for permission or asks you something, the choices appear as buttons you click. The same goes for the terminal's own pickers (`/theme`, `/export`, Codex's `/permissions`…).
+- **Messages queued, not lost**: what you send while the agent works shows at once as a queued bubble. With Claude you can **Send now** (interrupt) or **Edit** it back into the box.
+- **Side questions**: ask about the conversation in the side chat (⌘;) while the agent keeps working. Nothing there is added to its conversation.
+- **Cards for the numbers**: context usage as a bar by category, plan limits and spend with progress bars, MCP servers with Reconnect and Disable buttons, memory and settings files that open in an editor.
+- **Pick, don't type**: the model and effort from a menu, earlier sessions to resume from a list, the permission mode from a list. Commands come with their descriptions and the arguments they take.
+- **A real text box**: multi-line editing, an emoji picker (☺) and `:emoji` autocomplete, and command chips.
+
 ## Install
 
 Ask the agent running in your Herdr: *"add the layout from github.com/naruse/herdr-chat"*. Or do it by hand:
