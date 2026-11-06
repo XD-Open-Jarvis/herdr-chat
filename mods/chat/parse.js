@@ -100,6 +100,9 @@ export class Transcript {
     const table = /### Estimated usage by category\s*\n([\s\S]*?)(?:\n\s*\n|\n###|$)/.exec(md)?.[1] ?? "";
     const cats = table.split("\n").slice(2).map((l) => l.split("|").map((x) => x.trim()).filter(Boolean))
       .filter((c) => c.length >= 3).map(([name, tokens, pct]) => ({ name, tokens, pct: parseFloat(pct) || 0 }));
+    const win = { k: 1e3, m: 1e6 };
+    const max = /([\d.]+)([km]?)$/.exec(tokens?.[2] ?? "");
+    if (max) this.context = { used: this.context?.used ?? 0, window: parseFloat(max[1]) * (win[max[2]] ?? 1) };
     const card = { kind: "card", card: "context", model: /\*\*Model:\*\*\s*(\S+)/.exec(md)?.[1] ?? null,
       used: tokens?.[1], max: tokens?.[2], pct: tokens ? Number(tokens[3]) : null, cats };
     const prev = this.last();
@@ -183,6 +186,10 @@ export class Transcript {
     } else if (d.type === "assistant") {
       if (d.message?.model && !d.message.model.startsWith("<")) this.model = d.message.model;
       const u = d.message?.usage, id = d.message?.id;
+      // How full the context is: what the latest reply was sent and wrote.
+      if (u && !d.message.model?.startsWith("<")) {
+        this.context = { used: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0), window: this.context?.window ?? null };
+      }
       if (u && id && !this.counted.has(id) && !d.message.model?.startsWith("<")) {
         this.counted.add(id);
         const m = (this.tokens[d.message.model] ??= { input: 0, output: 0 });

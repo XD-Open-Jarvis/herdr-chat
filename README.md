@@ -37,6 +37,10 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - **Cards for the numbers**: context usage as a bar by category, plan limits and spend with progress bars, MCP servers with Reconnect and Disable buttons, memory and settings files that open in an editor.
 - **Pick, don't type**: the model and effort from a menu, earlier sessions to resume from a list, the permission mode from a list. Commands come with their descriptions and the arguments they take.
 - **A real text box**: multi-line editing, an emoji picker (☺) and `:emoji` autocomplete, and command chips.
+- **`@` file mentions**: type `@` and part of a name to pick a file or folder from the agent's project.
+- **Copy and edit messages**: hover a reply to copy it, or one of your messages to copy it or put it back in the box to change and send again.
+- **Search the conversation**: ⌘F (or **Search** in the header) shows only the messages that match.
+- **A context meter**: how full the session is, next to the model, with **Compact now** one click away.
 
 ## Install
 

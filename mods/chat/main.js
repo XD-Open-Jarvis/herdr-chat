@@ -4,7 +4,7 @@
 // the agent in a new space and opens a chat pane there, zoomed over the
 // agent's terminal, with props { terminal, started: true }.
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, InputState, Input } from "gpui-base";
 import {
   exec, hc, run, props, terminals, panes, spaces, theme, settings, appHome, home,
   watchFolder, nextCommand, pickFolder, shared, setShared, closeOverlay, machines, openOverlay, notify,
@@ -146,9 +146,12 @@ export default class Chat extends View {
       const v = this.input.value(), e = emojify(v);
       if (e !== v) this.input.set_value(e);
       this.updateEmoji(cx);
+      this.updateMention(cx);
       cx.notify();
     });
     this.input.focus();
+    this.search = InputState.new({ placeholder: "Search this conversation" });
+    this.search.on("change", (_e, cx) => { this.off = 0; cx.notify(); });
     this.sideInput = TextareaState.new({ placeholder: "Ask about this conversation…" });
     this.sideInput.set_auto_grow(1, 6);
     this.sideInput.on("submit", (e, cx) => {
@@ -168,6 +171,8 @@ export default class Chat extends View {
         { keystroke: "left", action: "chat_menu_left", context: "ChatMenuNav > Input" },
         { keystroke: "right", action: "chat_menu_right", context: "ChatMenuNav > Input" },
         { keystroke: "cmd-;", action: "chat_side_toggle", context: "ChatRoot" },
+        { keystroke: "cmd-f", action: "chat_search", context: "ChatRoot" },
+        { keystroke: "escape", action: "chat_search_close", context: "ChatSearch" },
         { keystroke: "escape", action: "chat_menu_escape", context: "ChatPanel > Input" },
         { keystroke: "escape", action: "chat_menu_escape", context: "ChatMenu > Input" },
         { keystroke: "escape", action: "chat_menu_escape", context: "ChatMenuNav > Input" },
@@ -273,6 +278,32 @@ export default class Chat extends View {
     });
   }
 
+  // Copies text and shows a ✓ on the button `id` for a moment.
+  copyOut(text, id, cx) {
+    cx.spawn(async (cx) => {
+      if (!(await copyText(text))) return notify({ title: "No clipboard tool", body: "Install wl-clipboard or xclip to copy", level: "warning", timeout: 4000 });
+      this.copied = id;
+      cx.notify();
+      await exec("sh", ["-c", "sleep 1.5"]);
+      if (this.copied === id) { this.copied = null; cx.notify(); }
+    });
+  }
+
+  hover(key) {
+    return (on, cx) => {
+      if (on && this.hovered !== key) { this.hovered = key; cx.notify(); }
+      else if (!on && this.hovered === key) { this.hovered = null; cx.notify(); }
+    };
+  }
+
+  tinyButton(id, icon, tip, action, t) {
+    return div().id(id).flex_none().size(24).flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .bg(t.background).border_1().border_color(t.border).text_color(t.muted)
+      .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip)
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(action)
+      .child(svg(`mods/chat/icons/${icon}.svg`).size(12));
+  }
+
   // A reply: its markdown, with each code block drawn on its own so it gets
   // a Copy button and a Play button (put it in the message box to send).
   reply(e, t) {
@@ -290,15 +321,7 @@ export default class Chat extends View {
       return div().w_full().relative()
         .child(this.markdown(id, `${p.fence}${p.lang}\n${p.code}\n${p.fence}`))
         .child(h_flex().absolute().top(6).right(6).gap(4)
-          .child(btn("copy", done ? "check" : "copy", done ? "Copied" : "Copy", (_e, cx) => {
-            cx.spawn(async (cx) => {
-              if (!(await copyText(p.code))) return notify({ title: "No clipboard tool", body: "Install wl-clipboard or xclip to copy", level: "warning", timeout: 4000 });
-              this.copied = id;
-              cx.notify();
-              await exec("sh", ["-c", "sleep 1.5"]);
-              if (this.copied === id) { this.copied = null; cx.notify(); }
-            });
-          }))
+          .child(btn("copy", done ? "check" : "copy", done ? "Copied" : "Copy", (_e, cx) => this.copyOut(p.code, id, cx)))
           .child(btn("play", "play", "Put in the message box", (_e, cx) => {
             this.input.set_value("");
             this.input.replace(p.code);
@@ -435,6 +458,80 @@ export default class Chat extends View {
     cx.notify();
   }
 
+  // The @ menu, as in Claude and ChatGPT: after an @, the files and folders
+  // of the agent's project whose paths match, to mention one by its path.
+  updateMention(cx) {
+    const v = this.input.value().replace(/\n/g, "");
+    const m = !this.dialog && !this.slash() && this.mentionClosed !== v ? /(^|\s)@([^\s@]*)$/.exec(v) : null;
+    if (!m) { this.mention = null; return; }
+    const term = this.terminal();
+    const folder = term?.foreground?.cwd ?? term?.cwd;
+    if (!folder) return;
+    const show = () => {
+      const q = m[2].toLowerCase();
+      const files = this.fileList?.paths ?? [];
+      const score = (p) => {
+        const l = p.toLowerCase(), base = l.split("/").filter(Boolean).pop() ?? l;
+        return !q ? 0 : base.startsWith(q) ? 0 : base.includes(q) ? 1 : l.includes(q) ? 2 : 9;
+      };
+      const items = files.map((p) => [score(p), p]).filter(([sc]) => sc < 9).sort((a, b) => a[0] - b[0] || a[1].length - b[1].length || a[1].localeCompare(b[1])).slice(0, 50).map(([, p]) => p);
+      this.mention = { v, start: v.length - m[2].length - 1, query: m[2], items, sel: 0, loading: !this.fileList };
+    };
+    show();
+    // The project's files: git's list (or a walk outside git), every 30 s at most.
+    if (this.fileList?.folder !== folder || Date.now() - this.fileList.at > 30000) {
+      if (this.listing) return;
+      this.listing = true;
+      cx.spawn(async (cx) => {
+        const r = await exec("sh", ["-c", `cd "$1" 2>/dev/null || exit 0
+          { git ls-files -co --exclude-standard 2>/dev/null || find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | sed 's|^./||'; } | head -20000`, "sh", folder], { on: machineOf(this.term) }).catch(() => ({ stdout: "" }));
+        const files = r.stdout.split("\n").filter(Boolean);
+        const dirs = new Set();
+        for (const f of files) { const parts = f.split("/"); for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/") + "/"); }
+        this.fileList = { folder, at: Date.now(), paths: [...dirs, ...files] };
+        this.listing = false;
+        if (this.mention) this.updateMention(cx);
+        cx.notify();
+      });
+    }
+  }
+
+  mentionMenu() {
+    const e = this.mention;
+    return e && e.v === this.input.value().replace(/\n/g, "") && (e.items.length || e.loading) ? e : null;
+  }
+
+  pickMention(path, cx) {
+    const e = this.mentionMenu();
+    if (!e || !path) return;
+    this.mention = null;
+    this.input.set_value("");
+    this.input.replace(e.v.slice(0, e.start) + "@" + path + (path.endsWith("/") ? "" : " "));
+    this.input.focus();
+    cx.notify();
+  }
+
+  mentionView(t) {
+    const e = this.mentionMenu();
+    const ROWS = 8;
+    const start = Math.max(0, Math.min(e.sel - Math.floor(ROWS / 2), e.items.length - ROWS));
+    return h_flex().w_full().max_w(900).child(v_flex().id("mention-menu").w(520).p(6).gap(1).rounded(14).border_1().border_color(t.border).bg(t.popover).shadow_md()
+      .child(div().px(10).pt(4).pb(4).text_size(11).font_semibold().text_color(t.dim).child(e.loading && !e.items.length ? "Looking for files…" : e.query ? `Files matching "${e.query}"` : "Files in this project"))
+      .children(e.items.slice(start, start + ROWS).map((p, n) => {
+        const i = start + n, dir = p.endsWith("/");
+        const parts = p.replace(/\/$/, "").split("/"), base = parts.pop(), where = parts.join("/");
+        return h_flex().id(`men-${i}`).px(10).py(5).gap(8).rounded(8).items_center().cursor_pointer()
+          .bg(i === e.sel ? t.selected : t.popover)
+          .on_hover((on, cx) => { if (on && e.sel !== i) { e.sel = i; cx.notify(); } })
+          .on_mouse_down("left", (_ev, cx) => cx.stop_propagation())
+          .on_click((_ev, cx) => this.pickMention(p, cx))
+          .child(svg(`mods/files/${dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.dim))
+          .child(div().flex_none().text_size(13).text_color(t.foreground).child(base + (dir ? "/" : "")))
+          .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.dim).child(where));
+      }))
+      .child(div().px(10).pt(4).pb(2).text_size(11).text_color(t.dim).child("↑↓ choose · Tab or Enter pick · Esc close")));
+  }
+
   emojiView(t) {
     const e = this.emojiMenu();
     const ROWS = 8;
@@ -460,6 +557,16 @@ export default class Chat extends View {
   }
 
   menuKey(e, cx) {
+    const mm = this.mentionMenu();
+    if (mm) {
+      const k = e.keystroke;
+      if ((k === "up" || k === "down" || k === "ctrl-p" || k === "ctrl-n") && mm.items.length) mm.sel = (mm.sel + (k === "up" || k === "ctrl-p" ? -1 : 1) + mm.items.length) % mm.items.length;
+      else if (k === "tab" || k === "enter") return this.pickMention(mm.items[mm.sel], cx);
+      else if (k === "escape") { this.mentionClosed = mm.v; this.mention = null; }
+      else return;
+      cx.stop_propagation();
+      return cx.notify();
+    }
     const em = this.emojiMenu();
     if (em) {
       const k = e.keystroke;
@@ -1065,15 +1172,40 @@ export default class Chat extends View {
         .when(p.files > 0, (el) => el.child(div().text_size(12).text_color(t.dim).child(`${p.files} file${p.files > 1 ? "s" : ""} attached`)))
         .when(Boolean(p.text), (el) => el.child(this.markdown(`pending-${i}`, emojify(p.text)))))
       .child(h_flex().gap(4).items_center().text_size(11.5).text_color(t.dim)
-        .child(div().pr(4).child(waiting ? (claude ? "Steering · read at its next step" : "Queued") : "Sending…"))
+        // Codex doesn't queue: a message sent while it works goes straight into
+        // the running turn as guidance, so there's nothing to send now or edit.
+        .child(div().pr(4).child(waiting && claude ? "Steering · read at its next step"
+          : !claude && (status === "working" || status === "blocked") ? "Steering · added to the running turn" : "Sending…"))
         .when(waiting && claude, (el) => el
           .child(act(`send-now-${i}`, "Send now", () => this.sendNow()))
           .when(Boolean(p.text), (el) => el.child(act(`edit-q-${i}`, "Edit", () => this.editQueued())))));
   }
 
   shown() {
-    const ents = this.t?.entries ?? [];
+    let ents = this.t?.entries ?? [];
+    // Searching: only what matches, the newest 200.
+    const q = this.searching ? this.search.value().trim().toLowerCase() : "";
+    if (q) {
+      const text = (e) => [e.text, e.title, ...(e.items ?? []).flatMap((i) => [i.name, i.summary, i.result])].filter(Boolean).join("\n").toLowerCase();
+      ents = ents.filter((e) => text(e).includes(q));
+      this.matches = ents.length;
+      return { start: Math.max(0, ents.length - 200), ents };
+    }
     return { start: Math.max(0, ents.length - this.limit), ents };
+  }
+
+  openSearch(cx) {
+    this.searching = true;
+    this.search.focus();
+    cx.notify();
+  }
+
+  closeSearch(cx) {
+    this.searching = false;
+    this.search.set_value("");
+    this.off = 0;
+    this.input.focus();
+    cx.notify();
   }
 
   // Images are drawn from Herdr's folder, so the shown ones are copied there first.
@@ -1106,6 +1238,8 @@ export default class Chat extends View {
   send(cx) {
     const menu = this.slash();
     if (menu) return this.choose(menu.pickable[menu.sel], cx);
+    const mm = this.mentionMenu();
+    if (mm?.items.length) return this.pickMention(mm.items[mm.sel], cx);
     const em = this.emojiMenu();
     if (em) return this.pickEmoji(em.items[em.sel], cx);
     if (this.panelLive()) { this.input.set_value(""); this.panelKeys("enter"); return cx.notify(); }
@@ -1332,12 +1466,23 @@ export default class Chat extends View {
       const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.85));
       const longest = Math.max(0, ...(e.text ?? "").split("\n").map((l) => l.length));
       const w = e.images.length ? max : Math.min(max, Math.ceil(longest * 7.6) + 32);
-      return h_flex().w_full().justify_end().child(
-        v_flex().w(w).flex_none().gap(8).px(14).py(10).rounded(14).bg(t.raised)
+      // On hover, Copy and Edit (back into the message box to change and send
+      // again) beside the bubble; its width changes, never its height.
+      const on = this.hovered === e.key && Boolean(e.text);
+      return h_flex().id(`row-${e.key}`).w_full().justify_end().items_start().gap(4).on_hover(this.hover(e.key))
+        .when(on, (el) => el.child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
+          .child(this.tinyButton(`edit-${e.key}`, "edit", "Edit and send again", (_e, cx) => { this.input.set_value(""); this.input.replace(e.text); this.input.focus(); cx.notify(); }, t)))
+        .child(v_flex().w(w).flex_none().gap(8).px(14).py(10).rounded(14).bg(t.raised)
           .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 280, 200)))))
           .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))));
     }
-    if (e.kind === "assistant") return this.reply(e, t);
+    if (e.kind === "assistant") {
+      // On hover, Copy for the whole reply, over its top right corner.
+      return div().id(`row-${e.key}`).w_full().relative().on_hover(this.hover(e.key))
+        .child(this.reply(e, t))
+        .when(this.hovered === e.key && e.key !== "streaming", (el) => el.child(h_flex().absolute().top(-8).right(0)
+          .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t))));
+    }
     if (e.kind === "card") return this.card(e, t);
     // What a slash command printed, as the terminal shows it.
     if (e.kind === "output") {
@@ -1562,7 +1707,43 @@ export default class Chat extends View {
       .child(h_flex().h(32).px(12).gap(8).items_center().text_size(12)
         .child(div().flex_none().font_semibold().child(AGENTS[kind] ?? "Terminal"))
         .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child([this.t?.title, this.term].filter(Boolean).join(" · ")))
-        .child(btn("go-term", termLabel, (_e, cx) => this.toggleTerminal(cx))));
+        .child(btn("search", "Search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx))))
+        .child(btn("go-term", termLabel, (_e, cx) => this.toggleTerminal(cx))))
+      .when(Boolean(this.searching) && (this.shown(), true), (el) => el.child(h_flex().id("search-bar").key_context("ChatSearch")
+        .on_action("chat_search_close", (_e, cx) => this.closeSearch(cx))
+        .h(38).px(12).gap(8).items_center().border_t(1).border_color(t.border).bg(t.background)
+        .child(div().flex_1().child(Input.new(this.search).w_full().h(28).px(10).rounded(8).border_1().border_color(t.input).bg(t.background).text_size(12.5)))
+        .child(div().flex_none().text_size(12).text_color(t.dim).child(this.search.value().trim() ? `${this.matches ?? 0} match${this.matches === 1 ? "" : "es"}` : ""))
+        .child(div().id("search-close").flex_none().px(6).py(2).rounded(5).cursor_pointer().text_color(t.muted)
+          .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.closeSearch(cx)).child("×"))));
+  }
+
+  // How full the session's context is, left of the model: a small bar and a
+  // percentage; its menu shows the details or compacts the session.
+  contextMeter(t) {
+    const c = this.t?.context;
+    if (!c?.used) return div();
+    const model = this.current().model ?? "";
+    const window = c.window ?? (/claude-(opus|sonnet|haiku|fable)-5|\[1m\]/.test(model) ? 1e6 : this.current().kind === "claude" ? 2e5 : null);
+    if (!window) return div();
+    const pct = Math.min(100, Math.round((100 * c.used) / window));
+    const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : `${Math.round(n / 1e3)}k`);
+    const color = pct >= 85 ? t.blocked : pct >= 65 ? t.working : t.accent;
+    const run = (cmd) => (_e, cx) => { this.showContext = false; this.deliverCommand(cmd, cx); cx.notify(); };
+    const item = (id, text, action) => h_flex().id(id).px(10).py(6).rounded(6).cursor_pointer().text_size(12.5).hover((s) => s.bg(t.hover)).on_click(action).child(text);
+    const menu = v_flex().w(250).p(4).rounded(10).border_1().border_color(t.border).bg(t.popover).shadow_lg()
+      .child(div().px(10).pt(8).pb(2).text_size(12.5).font_semibold().child(`Context ${pct}% full`))
+      .child(div().px(10).pb(8).text_size(11.5).text_color(t.dim).child(`${k(c.used)} of ${k(window)} tokens. Claude compacts by itself when it's nearly full.`))
+      .child(item("ctx-details", "Show details", run(this.current().kind === "codex" ? "/status" : "/context")))
+      .child(item("ctx-compact", "Compact now", run("/compact")));
+    return Popover.new("context-menu").anchor("bottom_right").open(Boolean(this.showContext))
+      .on_open_change((open, cx) => { this.showContext = open; cx.notify(); })
+      .trigger(h_flex().id("context").flex_none().h(30).px(8).gap(6).items_center().rounded_full().cursor_pointer()
+        .tooltip(`Context: ${k(c.used)} of ${k(window)} tokens`)
+        .hover((s) => s.bg(t.hover))
+        .child(div().w(28).h(5).rounded(3).bg(t.raised).child(div().h_full().rounded(3).bg(color).w(`${Math.max(4, pct)}%`)))
+        .child(div().text_size(12).text_color(pct >= 85 ? t.blocked : t.muted).child(`${pct}%`)))
+      .content(menu);
   }
 
   // The model and effort of the running session: a button in the message bar
@@ -1709,7 +1890,7 @@ export default class Chat extends View {
           .hover((s) => s.bg(t.hover)).on_click((_ev, cx) => { this.input.replace(e); this.input.focus(); cx.notify(); }).child(e)))))
       .child(div().id("composer").w_full()
         .when(Boolean(this.slash()), (el) => el.key_context(this.slash().nav ? "ChatMenuNav" : "ChatMenu"))
-        .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.key_context("ChatMenu"))
+        .when(!this.slash() && (Boolean(this.emojiMenu()) || Boolean(this.mentionMenu())), (el) => el.key_context("ChatMenu"))
         .when(!this.slash() && this.panelLive(), (el) => el.key_context("ChatPanel"))
         .on_action("chat_menu_up", (_e, cx) => this.menuKey({ keystroke: "up" }, cx))
         .on_action("chat_menu_down", (_e, cx) => this.menuKey({ keystroke: "down" }, cx))
@@ -1726,7 +1907,7 @@ export default class Chat extends View {
         .child(icon("attach", "+", (_e, cx) => this.pickFiles(cx)))
         .child(icon("emoji", "☺", (_e, cx) => { this.showEmoji = !this.showEmoji; cx.notify(); }, this.showEmoji))
         .child(div().flex_1())
-        .when(!this.dialog && Boolean(this.term), (el) => el.child(this.modelMenu(term, t)))
+        .when(!this.dialog && Boolean(this.term), (el) => el.child(this.contextMeter(t)).child(this.modelMenu(term, t)))
         .child(div().id("send").flex_none().size(32).rounded_full().flex().items_center().justify_center().cursor_pointer()
           .text_size(stop ? 12 : 16).font_semibold()
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)
@@ -1746,6 +1927,7 @@ export default class Chat extends View {
       .when(Boolean(this.panelView(t)), (el) => el.child(this.panelView(t)))
       .when(Boolean(this.slash()), (el) => el.child(h_flex().w_full().justify_center().child(this.commandMenu(t))))
       .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.emojiView(t))))
+      .when(!this.slash() && Boolean(this.mentionMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.mentionView(t))))
       .child(h_flex().w_full().justify_center().child(card));
   }
 
@@ -1839,6 +2021,7 @@ export default class Chat extends View {
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(13)
       .key_context("ChatRoot")
+      .on_action("chat_search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
       .on_action("chat_side_toggle", (_e, cx) => { this.side.open = !this.side.open; (this.side.open ? this.sideInput : this.input).focus(); cx.notify(); })
       .on_drop((e, cx) => this.addFiles(e.paths, cx))
       .when(this.ended(term), (el) => el.child(v_flex().id("ended").flex_none().items_center().gap(8).py(10).border_b(1).border_color(t.border).bg(t.chrome)
