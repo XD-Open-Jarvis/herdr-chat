@@ -1495,8 +1495,15 @@ export default class Chat extends View {
     }
     if (e.kind === "note") {
       const text = e.text.length > 400 ? e.text.slice(0, 400) + "…" : e.text;
-      return h_flex().w_full().justify_center().child(
-        div().px(10).py(3).rounded(8).bg(t.surface).text_size(11.5).text_color(t.dim).child(text));
+      const note = h_flex().w_full().justify_center().child(
+        h_flex().gap(8).px(10).py(3).rounded(8).bg(t.surface).text_size(11.5).text_color(t.dim).child(text)
+          .when(Boolean(e.summary), (el) => el.child(div().id(`sum-${e.key}`).cursor_pointer().text_color(t.accent)
+            .hover((s) => s.underline())
+            .on_click((_e, cx) => { this.summaryOpen = this.summaryOpen === e.key ? null : e.key; cx.notify(); })
+            .child(this.summaryOpen === e.key ? "Hide summary" : "Show summary"))));
+      if (!e.summary || this.summaryOpen !== e.key) return note;
+      return v_flex().w_full().gap(8).child(note).child(div().w_full().px(16).py(12).rounded(12).border_1()
+        .border_color(t.border).bg(t.surface).text_size(13).child(this.markdown(`summary-${e.key}`, e.summary)));
     }
     return this.tools(e, t, last);
   }

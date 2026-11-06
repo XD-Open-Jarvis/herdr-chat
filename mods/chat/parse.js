@@ -81,7 +81,12 @@ export class Transcript {
       return this.push({ kind: "user", command: true, text: `${cmd[1].trim()}${args ? " " + args : ""}`, images: [] });
     }
     const out = /<local-command-(?:stdout|stderr)>([\s\S]*?)<\/local-command-(?:stdout|stderr)>/.exec(text);
-    if (out) { const o = stripAnsi(out[1]).trim(); if (o) this.push({ kind: "output", text: o }); return; }
+    if (out) {
+      const o = stripAnsi(out[1]).trim();
+      if (/^Compacted\b/.test(o) && this.entries.some((e) => e.compact)) return;
+      if (o) this.push({ kind: "output", text: o });
+      return;
+    }
     if (/^<local-command-caveat>/.test(text)) return;
     const bash = /<bash-input>([\s\S]*?)<\/bash-input>/.exec(text);
     if (bash) text = "! " + bash[1];
@@ -102,7 +107,8 @@ export class Transcript {
       .filter((c) => c.length >= 3).map(([name, tokens, pct]) => ({ name, tokens, pct: parseFloat(pct) || 0 }));
     const win = { k: 1e3, m: 1e6 };
     const max = /([\d.]+)([km]?)$/.exec(tokens?.[2] ?? "");
-    if (max) this.context = { used: this.context?.used ?? 0, window: parseFloat(max[1]) * (win[max[2]] ?? 1) };
+    const size = (v) => { const m = /([\d.]+)([km]?)$/.exec(v ?? ""); return m ? parseFloat(m[1]) * (win[m[2]] ?? 1) : null; };
+    if (max) this.context = { used: size(tokens[1]) ?? this.context?.used ?? 0, window: size(tokens[2]) };
     const card = { kind: "card", card: "context", model: /\*\*Model:\*\*\s*(\S+)/.exec(md)?.[1] ?? null,
       used: tokens?.[1], max: tokens?.[2], pct: tokens ? Number(tokens[3]) : null, cats };
     const prev = this.last();
@@ -156,7 +162,12 @@ export class Transcript {
       return;
     }
     if (d.type === "ai-title" && d.aiTitle) this.title = d.aiTitle;
-    if (d.type === "system" && d.subtype === "compact_boundary") return this.note("Conversation compacted");
+    if (d.type === "system" && d.subtype === "compact_boundary") {
+      // Until the next reply says exactly, the summary plus what every request carries.
+      const after = d.compactMetadata?.postTokens;
+      if (after != null) this.context = { used: after + (this.base ?? 0), window: this.context?.window ?? null };
+      return this.push({ kind: "note", text: "Conversation compacted", compact: true });
+    }
     // Slash commands and what they print, in newer versions of Claude Code.
     if (d.type === "system" && d.subtype === "local_command" && typeof d.content === "string") return this.user(d.content);
     // A message sent while the agent worked and taken into that turn is logged
@@ -172,6 +183,11 @@ export class Transcript {
       // /context also logs its numbers as markdown: they become a card.
       const meta = d.message?.content;
       if (d.isMeta && typeof meta === "string" && meta.startsWith("## Context Usage")) return this.contextCard(meta);
+      if (d.isCompactSummary && typeof meta === "string") {
+        const note = [...this.entries].reverse().find((e) => e.compact);
+        if (note) note.summary = meta.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+        return;
+      }
       if (d.isMeta || d.isCompactSummary || d.isVisibleInTranscriptOnly) return;
       const c = d.message?.content;
       if (typeof c === "string") return this.user(c);
@@ -188,6 +204,7 @@ export class Transcript {
       const u = d.message?.usage, id = d.message?.id;
       // How full the context is: what the latest reply was sent and wrote.
       if (u && !d.message.model?.startsWith("<")) {
+        if (this.base == null) this.base = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
         this.context = { used: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0), window: this.context?.window ?? null };
       }
       if (u && id && !this.counted.has(id) && !d.message.model?.startsWith("<")) {
