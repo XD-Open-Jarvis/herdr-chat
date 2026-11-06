@@ -9,6 +9,9 @@
 const CLAUDE = { mark: "⏺ ", prompt: /^❯ \S/, run: /^! \S/, tool: /^⏺ [\w.:-]+\(|^⏺ (Read|Searched|Listed|Wrote|Updated|Edited|Fetched|Ran|Called|Found)\b.*\b(file|files|pattern|patterns|lines?|director(y|ies)|command|tools?)\b/ };
 const CODEX = { mark: "• ", prompt: /^› \S/, run: /^\$ \S/, tool: /^• (Running|Ran|Explored|Exploring|Edited|Editing|Read|Reading|Searched|Searching|Called|Calling|Updated Plan|Added|Deleted|Listed|Viewed|Applied|Proposed)\b/ };
 const STATUS = /^• (Working|Waiting|Interrupted)\b/;
+// The full-screen view's one-line summaries of tool calls ("Running 1 shell
+// command…", "Read 2 files"): a command running, not text.
+const SUMMARY = /^(Running|Ran|Reading|Read|Searching|Searched|Listing|Listed|Writing|Wrote|Editing|Edited|Updating|Updated|Fetching|Fetched|Calling|Called|Creating|Created|Stopping|Stopped)\b.*\b(commands?|files?|patterns?|director(y|ies)|tools?|agents?|pages?|tasks?|searches)\b|^\d+ tool calls?\b/i;
 
 // { kind: "text", text } | { kind: "run", title, out: [lines], time } | null
 export function live(screen, kind) {
@@ -47,7 +50,9 @@ export function live(screen, kind) {
     let last = g;
     while (last + 1 < body.length && (isOut(body[last + 1]) || (body[last + 1].trim() && depth(body[last + 1]) > depth(body[g])))) last++;
     const after = body.slice(last + 1);
-    if (after.some((l) => l.trim())) {
+    const said = after.filter((l) => l.trim());
+    if (said.length && said.every((l) => SUMMARY.test(l.trim()))) return runOf(said[said.length - 1].trim(), []);
+    if (said.length) {
       // Text written after the tool: that's what's new.
       return textOf(after.map((l) => l.slice(2)));
     } else {
@@ -58,6 +63,9 @@ export function live(screen, kind) {
     }
   }
   if (k.run.test(head) || k.tool.test(head)) return runOf(k.run.test(head) ? `$ ${head.slice(2)}` : head.slice(k.mark.length), body);
+  // A summary line last in a text block: the tool it's running now.
+  const lastLine = [...body].reverse().find((l) => l.trim());
+  if (lastLine && SUMMARY.test(lastLine.trim())) return runOf(lastLine.trim(), []);
   return textOf([head.slice(k.mark.length), ...body.map((l) => l.slice(2))]);
 }
 
