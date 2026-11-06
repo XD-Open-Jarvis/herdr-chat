@@ -20,7 +20,7 @@ import { parsePrompt, choose } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, openFile, pickFiles, imageSize } from "./platform.js";
-import { streaming } from "./stream.js";
+import { live } from "./stream.js";
 
 const CACHE = "data/chat";
 const PAGE = 60;
@@ -233,14 +233,33 @@ export default class Chat extends View {
     cx.spawn(async (cx) => {
       while (this.streamLoop === loop && this.terminal()?.status === "working") {
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
-        const text = r ? streaming(r.stdout, kind) : null;
-        if (text !== this.stream) { this.stream = text; cx.notify(); }
+        const now = r ? live(r.stdout, kind) : null;
+        const text = now?.kind === "text" ? now.text : null;
+        const run = now?.kind === "run" ? now : null;
+        if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
         await exec("sh", ["-c", "sleep 0.35"]);
       }
       if (this.streamLoop === loop) this.streamLoop = null;
       this.stream = null;
+      this.running = null;
       cx.notify();
     });
+  }
+
+  // The command or tool running now, with its output so far, as the terminal
+  // shows it.
+  runningView(t) {
+    const r = this.running;
+    const mono = settings().font_family;
+    const out = r.out.slice(-10);
+    return v_flex().w_full().gap(6).px(12).py(9).rounded(10).border_1().border_color(t.border).bg(t.surface)
+      .child(h_flex().gap(8).items_center()
+        .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_medium().when(Boolean(mono), (d) => d.font_family(mono)).child(r.title))
+        .when(Boolean(r.time), (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).child(r.time))))
+      .when(out.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.muted)
+        .when(Boolean(mono), (d) => d.font_family(mono))
+        .child(this.markdown("running-out", "~~~~text\n" + out.join("\n") + "\n~~~~"))));
   }
 
   // The streamed reply, unless the log already has it.
@@ -1528,6 +1547,7 @@ export default class Chat extends View {
         .child(div().text_size(11.5).text_color(t.dim).child("Older history is in the log but not loaded"))))
       .children(shown.map((e, n) => this.entry(e, t, n === shown.length - 1)))
       .when(Boolean(this.streamShown()), (el) => el.child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true)))
+      .when(Boolean(this.running), (el) => el.child(this.runningView(t)))
       .children(this.pending.map((p, i) => this.queued(p, i, t)))
 ;
 

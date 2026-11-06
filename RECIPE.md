@@ -21,7 +21,7 @@ The terminal stays one click away.
     - Replies are plain markdown on the left.
     - Tool calls fold into one line ("3 tool calls · Bash, Read") that opens on click.
     - Images show inline and open in the system viewer.
-  - **While the agent works**: a spinner line ("Working…" or its own status) sits above the message box. The reply being written shows live, read from the terminal.
+  - **While the agent works**: a spinner line ("Working…" or its own status) sits above the message box. The reply being written shows live, read from the terminal. So does the command or tool running now: a card with a spinner, its title (`Bash(npm test)`, `$ gh auth …`, `Running npm test`), its last 10 output lines and its elapsed time.
   - **Message box**: one card with rounded 18 px corners.
     - The text field grows from 1 to 10 rows.
     - Under it: **+** (attach files), **☺** (emoji grid), the model and effort button, and a round send button (■ while the agent works and the box is empty).
@@ -101,7 +101,7 @@ The terminal stays one click away.
   - `source.js`: finds the log from the terminal's foreground process.
   - `commands.js`: the command list.
   - `sdk.js`: requests to the agents.
-  - `stream.js`: reads the reply being written from the terminal screen.
+  - `stream.js`: reads what the agent is doing from the terminal screen: the reply being written, or the running command or tool and its output.
   - `prompt.js`: parses terminal pickers.
   - `platform.js`: clipboard, file picker, open, image size.
   - `emoji.js` and `emoji-names.js`: shortcodes and 1,519 Unicode-named emoji.
