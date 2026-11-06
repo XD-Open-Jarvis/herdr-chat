@@ -1439,13 +1439,6 @@ export default class Chat extends View {
     });
   }
 
-  // Closes only the chat: the agent keeps running in its terminal, which takes
-  // the tab. "Move to chat" brings the chat back.
-  closeChat(mine, termPane) {
-    run("pane.close", { pane: mine.pane });
-    run("pane.focus", { pane: termPane.pane });
-  }
-
   // Dropped files are copied first: a screenshot dragged from its corner
   // thumbnail is a temporary file macOS deletes moments later.
   addFiles(paths, cx) {
@@ -1760,8 +1753,6 @@ export default class Chat extends View {
     const { kind } = this.current();
     const mine = this.myPane();
     const termLabel = mine ? (mine.zoomed ? "Show terminal" : "Hide terminal") : "Terminal";
-    // Only with the agent's terminal in this tab, to go back to.
-    const termPane = mine && panes().find((p) => p.terminal === this.term && p.tab === mine.tab);
     const btn = (id, text, action) => div().id(id).flex_none().px(8).py(3).rounded(6).cursor_pointer().text_color(t.muted)
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
     return v_flex().flex_none().border_b(1).border_color(t.border).bg(t.chrome)
@@ -1773,8 +1764,7 @@ export default class Chat extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(`Search (${shortcut("F")})`)
           .on_click((_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
           .child(svg("mods/chat/icons/search.svg").size(14)))
-        .child(btn("go-term", termLabel, (_e, cx) => this.toggleTerminal(cx)))
-        .when(Boolean(termPane), (el) => el.child(btn("close-chat", "Close chat", () => this.closeChat(mine, termPane)))))
+        .child(btn("go-term", termLabel, (_e, cx) => this.toggleTerminal(cx))))
       .when(Boolean(this.searching) && (this.shown(), true), (el) => el.child(h_flex().id("search-bar").key_context("ChatSearch")
         .on_action("chat_search_close", (_e, cx) => this.closeSearch(cx))
         .h(38).px(12).gap(8).items_center().border_t(1).border_color(t.border).bg(t.background)

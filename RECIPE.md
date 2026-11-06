@@ -15,7 +15,7 @@ The terminal stays one click away.
 ## What you see
 
 - **The chat pane** (`chat`). It opens zoomed over the agent's terminal in the same tab.
-  - **Header** (32 px, `chrome` background): the agent's name ("Claude Code" or "Codex"), the session title, the terminal address, and on the right a search icon, a **Show terminal / Hide terminal** button and, while the agent's terminal is in the tab, **Close chat**.
+  - **Header** (32 px, `chrome` background): the agent's name ("Claude Code" or "Codex"), the session title, the terminal address, and on the right a search icon and a **Show terminal / Hide terminal** button.
   - **Conversation**: centered in a column up to 900 px wide.
     - Your messages are `raised` bubbles on the right, sized to their longest line.
     - Replies are plain markdown on the left.
@@ -49,7 +49,7 @@ The terminal stays one click away.
 - **Emoji menu**: a 380 px card titled `Emoji matching ":tad"`, with 8 rows of an emoji plus its `:name:`.
 - **File editor** (`chat-file`): an 820×600 dialog with the file's name and path, **Close** and **Save** (⌘S), and a code editor.
 - **Elsewhere**:
-  - The tab bar (`chat-tabs`) gets a **Chat** button next to Files and Changes. While the shown tab has a Claude or Codex terminal and no chat yet, it reads **Move to chat**, in the `accent` color with an `accent` border.
+  - The tab bar (`chat-tabs`) gets a **Move to chat** button left of Files and Changes, in the `accent` color with an `accent` border. It shows only while the shown tab has a Claude or Codex terminal and no chat; with a chat open, the chat's own header shows or hides the terminal.
   - The spaces sidebar (`spaces-chat`) gets **New chat there** buttons.
   - ⌘N (Ctrl+N on Linux and Windows) opens the New chat form: pick the agent, folder, model and effort, then Start.
 
@@ -89,7 +89,6 @@ The terminal stays one click away.
 - **Closing**:
   - The chat pane's × asks whether to end the agent ("End agent" closes both the chat and the terminal; "Keep running" closes only the chat).
   - The terminal's × asks the same question ("Hide terminal" keeps it running).
-  - **Close chat** in the header closes only the chat, without asking, and focuses the terminal. The tab bar then offers **Move to chat** again.
   - If the terminal ends anyway, the chat shows "This agent's terminal has ended." with **Close chat**.
 
 ## Built from
@@ -129,7 +128,7 @@ The terminal stays one click away.
   - `python3`, `claude` and/or `codex`, `sh`.
   - For the desktop: `pbcopy` and `osascript` (macOS); `wl-copy`, `xclip`, `xsel` or KDE Klipper over `qdbus`, `kdialog` or `zenity`, and `xdg-open` (Linux).
 - **`mods/chat-pane`**: a copy of the shipped `pane` header whose × asks before ending an agent. Its method is called `closePane`, not `close`.
-- **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Chat button. It splits a chat pane to the right of the tab's agent with `run("pane.split")`, then zooms it once it shows up in `panes()`.
+- **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Move to chat button. It splits a chat pane to the right of the tab's agent with `run("pane.split")`, then zooms it once it shows up in `panes()`.
 - **`mods/spaces-chat`**: a copy of the shipped `spaces` sidebar whose + opens the New chat form.
 - **`keys.json`** (macOS): `cmd-n` → `mod.open:chat`. **`keys.linux-windows.json`**: `ctrl-n` → `mod.open:chat`.
 

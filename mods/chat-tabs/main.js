@@ -53,9 +53,9 @@ export default class Tabs extends View {
     localStorage.setItem("panels", JSON.stringify(this.panels));
   }
 
-  // The Chat button: the chat for the shown tab's agent. With none yet, opens
-  // one beside the agent's terminal (the focused one first) and zooms it, and
-  // reads "Move to chat"; otherwise toggles between the chat alone and the chat beside the terminal.
+  // "Move to chat": shown while the tab has a Claude or Codex terminal and no
+  // chat. Opens one beside the agent's terminal (the focused one first) and
+  // zooms it. Once there's a chat, its own header shows or hides the terminal.
   chatIn(tab) {
     const inTab = panes().filter((p) => p.tab === tab?.id);
     return {
@@ -66,8 +66,7 @@ export default class Tabs extends View {
 
   openChat(tab, cx) {
     const { chat, agent } = this.chatIn(tab);
-    if (chat) return run("pane.zoom", { pane: chat.pane });
-    if (!agent) return notify({ title: "No agent in this tab", body: "Chat works with Claude Code and Codex terminals.", level: "info" });
+    if (chat || !agent) return;
     run("pane.split", { direction: "right", pane: agent.pane, mod: "chat", props: { terminal: agent.terminal } });
     // run() gives no pane id: zoom the chat once it's in the tab.
     cx.spawn(async () => {
@@ -126,21 +125,18 @@ export default class Tabs extends View {
     };
     const tab = shown.find((c) => c.active);
     const { chat, agent } = this.chatIn(tab);
-    const chatOn = Boolean(chat?.zoomed);
-    // A Claude or Codex terminal without a chat yet: the button says it moves it into one.
     const move = Boolean(agent && !chat);
     const chatButton = h_flex().id("panel-chat").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
-      .text_size(12).bg(chatOn ? t.selected : t.chrome).text_color(chatOn ? t.foreground : move ? t.accent : chat ? t.muted : t.dim)
-      .when(move, el => el.border_1().border_color(t.accent))
+      .text_size(12).bg(t.chrome).text_color(t.accent).border_1().border_color(t.accent)
       .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
       .on_click((_e, cx) => this.openChat(tab, cx))
-      .child(svg("mods/chat-tabs/chat.svg").size(14)).child(move ? "Move to chat" : "Chat");
+      .child(svg("mods/chat-tabs/chat.svg").size(14)).child("Move to chat");
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
-      .child(chatButton)
+      .when(move, el => el.child(chatButton))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/chat-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

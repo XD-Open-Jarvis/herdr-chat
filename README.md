@@ -10,7 +10,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 
 ![Herdr with the chat beside its agent's terminal](screenshots/herdr-with-chat.png)
 
-*Herdr with the chat open: the spaces and agents on the left, a **Chat** button in the tab bar, and the chat beside its agent's terminal.*
+*Herdr with the chat open: the spaces and agents on the left, and the chat beside its agent's terminal.*
 
 | | |
 |---|---|
@@ -41,7 +41,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - **Copy and edit messages**: hover a reply to copy it, or one of your messages to copy it or put it back in the box to change and send again.
 - **Search the conversation**: ⌘F (Ctrl+F on Linux and Windows), or the search icon in the header, shows only the messages that match.
 - **Permissions from the message box**: Claude's modes (Ask before edits, Accept edits, Plan, Auto, Bypass) or Codex's (Ask for approval, Approve for me, Full Access, Read Only), next to the model.
-- **Move to chat**: a Claude or Codex terminal you started yourself gets a **Move to chat** button in the tab bar that opens it as a chat. **Close chat** in the chat's header goes back to just the terminal, with the agent still running.
+- **Move to chat**: a Claude or Codex terminal you started yourself gets a **Move to chat** button in the tab bar that opens it as a chat.
 
 ## Install
 
@@ -72,7 +72,7 @@ To keep your own layout instead, point its pane header at `chat-pane` and its ta
 | `mods/chat` | The chat itself |
 | `mods/chat-file` | The editor dialog behind `/memory`, `/hooks` and `/config` |
 | `mods/chat-pane` | The pane header: closing a chat or an agent's terminal asks first |
-| `mods/chat-tabs` | The tab bar with a **Chat** button |
+| `mods/chat-tabs` | The tab bar with a **Move to chat** button |
 | `mods/spaces-chat` | The spaces sidebar with **New chat there** |
 | `layouts/chat.json` | Herdr's main layout, using the mods above |
 | `keys.json`, `keys.linux-windows.json` | New chat on ⌘N (macOS) or Ctrl+N (Linux and Windows) |
