@@ -15,7 +15,7 @@ The terminal stays one click away.
 ## What you see
 
 - **The chat pane** (`chat`). It opens zoomed over the agent's terminal in the same tab.
-  - **Header** (32 px, `chrome` background): the agent's name ("Claude Code" or "Codex"), the session title, the terminal address, and a **Show terminal / Hide terminal** button on the right.
+  - **Header** (32 px, `chrome` background): the agent's name ("Claude Code" or "Codex"), the session title, the terminal address, and on the right a search icon, a **Show terminal / Hide terminal** button and, while the agent's terminal is in the tab, **Close chat**.
   - **Conversation**: centered in a column up to 900 px wide.
     - Your messages are `raised` bubbles on the right, sized to their longest line.
     - Replies are plain markdown on the left.
@@ -89,6 +89,7 @@ The terminal stays one click away.
 - **Closing**:
   - The chat pane's × asks whether to end the agent ("End agent" closes both the chat and the terminal; "Keep running" closes only the chat).
   - The terminal's × asks the same question ("Hide terminal" keeps it running).
+  - **Close chat** in the header closes only the chat, without asking, and focuses the terminal. The tab bar then offers **Move to chat** again.
   - If the terminal ends anyway, the chat shows "This agent's terminal has ended." with **Close chat**.
 
 ## Built from
@@ -123,6 +124,7 @@ The terminal stays one click away.
   - `hc send`, `hc keys`, `hc read`, `hc interrupt`.
   - `pane.split`, `pane.zoom`, `pane.focus`, `pane.swap`, `pane.close`, `tab.close`, `layout.select` and `layout.show` for Changes.
   - `openOverlay` for `chat-file`, `notify`, `cx.bind_keys` with key contexts `ChatMenu`, `ChatMenuNav`, `ChatPanel` and `ChatRoot`.
+- **Opening on a running agent**: until its log loads, the chat doesn't read the terminal for questions unless the agent is *blocked* or hasn't reported a status yet. Otherwise a numbered list in its last reply shows up as choices.
 - **Programs**:
   - `python3`, `claude` and/or `codex`, `sh`.
   - For the desktop: `pbcopy` and `osascript` (macOS); `wl-copy`, `xclip`, `xsel` or KDE Klipper over `qdbus`, `kdialog` or `zenity`, and `xdg-open` (Linux).
