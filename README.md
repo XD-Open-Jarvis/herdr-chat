@@ -14,10 +14,11 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 
 | | |
 |---|---|
-| ![The / menu](screenshots/command-menu.png)<br>**The `/` menu**: skills, the model and all commands | ![Searching commands](screenshots/command-search.png)<br>**Commands** with their descriptions, arguments and aliases |
-| ![Side chat](screenshots/side-chat.png)<br>**Side chat**: ask without interrupting the agent | ![A command running](screenshots/live-command.png)<br>**Live progress**: the command running now and its output |
-| ![Context card](screenshots/context-card.png)<br>**Cards** for context, usage, MCP servers, memory | ![A terminal picker in the chat](screenshots/terminal-picker.png)<br>**Terminal pickers** as buttons, right in the chat |
-| ![Model picker](screenshots/model-picker.png)<br>**Pick, don't type**: models, sessions, permission modes | ![Emoji](screenshots/emoji.png)<br>**`:emoji`** autocomplete, like Slack |
+| ![New chat](screenshots/new-chat.png)<br>**New chat** (⌘N): pick the agent, machine, folder, model and effort | ![The / menu](screenshots/command-menu.png)<br>**The `/` menu**: skills, the model and all commands |
+| ![Searching commands](screenshots/command-search.png)<br>**Commands** with their descriptions, arguments and aliases | ![Side chat](screenshots/side-chat.png)<br>**Side chat**: ask without interrupting the agent |
+| ![A command running](screenshots/live-command.png)<br>**Live progress**: the command running now and its output | ![Context card](screenshots/context-card.png)<br>**Cards** for context, usage, MCP servers, memory |
+| ![A terminal picker in the chat](screenshots/terminal-picker.png)<br>**Terminal pickers** as buttons, right in the chat | ![Model picker](screenshots/model-picker.png)<br>**Pick, don't type**: models, sessions, permission modes |
+| ![Emoji](screenshots/emoji.png)<br>**`:emoji`** autocomplete, like Slack | |
 
 ## What the chat does that the terminal can't
 
