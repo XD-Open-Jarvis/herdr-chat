@@ -66,6 +66,9 @@ export function live(screen, kind) {
   // A summary line last in a text block: the tool it's running now.
   const lastLine = [...body].reverse().find((l) => l.trim());
   if (lastLine && SUMMARY.test(lastLine.trim())) return runOf(lastLine.trim(), []);
+  // A block that is only summaries ("⏺ Running 1 shell command…"): a command.
+  const said = [head.slice(k.mark.length), ...body].map((l) => l.trim()).filter(Boolean);
+  if (said.length && said.every((l) => SUMMARY.test(l))) return runOf(said[said.length - 1], []);
   return textOf([head.slice(k.mark.length), ...body.map((l) => l.slice(2))]);
 }
 

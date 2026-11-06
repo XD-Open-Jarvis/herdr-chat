@@ -235,9 +235,11 @@ export default class Chat extends View {
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
         const now = r ? live(r.stdout, kind) : null;
         const text = now?.kind === "text" ? now.text : null;
-        // Between steps the screen shows neither: keep the last command's card
-        // rather than drop it and bring one back (the page would jump).
-        const run = now?.kind === "run" ? now : now?.kind === "text" ? null : this.running;
+        // Between steps the screen can show nothing new, or only text the chat
+        // already has: keep the last command's card rather than drop it and
+        // bring one back (the page would jump). New reply text replaces it.
+        const fresh = text && !this.logged(text);
+        const run = now?.kind === "run" ? now : fresh ? null : this.running;
         if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
         await exec("sh", ["-c", "sleep 0.35"]);
       }
@@ -266,16 +268,23 @@ export default class Chat extends View {
         .children(out.map((l) => div().h(LH).flex_none().truncate().child(l || " "))));
   }
 
-  // The streamed reply, unless the log already has it.
-  streamShown() {
-    if (!this.stream) return null;
+  // Whether the log already has this reply text (in this turn).
+  logged(text) {
     const norm = (x) => (x ?? "").replace(/[\s*_`#>]+/g, " ").trim();
-    const head = norm(this.stream).slice(0, 80);
+    // The start or the end: a long reply can be partly off the terminal's screen.
+    const n = norm(text), head = n.slice(0, 80), tail = n.slice(-80);
     const ents = this.t?.entries ?? [];
     for (let i = ents.length - 1; i >= 0 && ents[i].kind !== "user"; i--) {
-      if (ents[i].kind === "assistant" && norm(ents[i].text).includes(head)) return null;
+      if (ents[i].kind !== "assistant") continue;
+      const e = norm(ents[i].text);
+      if (e.includes(head) || e.includes(tail)) return true;
     }
-    return this.stream;
+    return false;
+  }
+
+  // The streamed reply, unless the log already has it.
+  streamShown() {
+    return this.stream && !this.logged(this.stream) ? this.stream : null;
   }
 
   // How often each command was sent here: the menu puts those first.
@@ -1537,7 +1546,11 @@ export default class Chat extends View {
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
     const content = v_flex().id("content").absolute().left(0).right(0).bottom(-this.off).px(side).py(18).gap(16)
       .on_size_change((size, cx) => {
-        if (this.grew && this.off > 0 && this.contentH > 0) this.off += size.height - this.contentH;
+        // Scrolled up, what's on screen stays put whatever changes below it:
+        // new messages, the live card, a streaming reply, a card or an image
+        // loading. Only "Show earlier" adds above, and must not move it.
+        if (this.off > 0 && this.contentH > 0 && !this.earlier) this.off += size.height - this.contentH;
+        this.earlier = false;
         this.grew = false;
         this.contentH = size.height;
         this.clamp();
@@ -1545,7 +1558,7 @@ export default class Chat extends View {
       })
       .when(start > 0, (el) => el.child(h_flex().w_full().justify_center().child(
         div().id("earlier").px(10).py(4).rounded(8).cursor_pointer().bg(t.surface).text_size(12).text_color(t.muted)
-          .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.limit += PAGE; this.cacheShown(cx); cx.notify(); })
+          .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.earlier = true; this.limit += PAGE; this.cacheShown(cx); cx.notify(); })
           .child(`Show earlier (${start})`))))
       .when(start === 0 && Boolean(this.truncated), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().text_size(11.5).text_color(t.dim).child("Older history is in the log but not loaded"))))
