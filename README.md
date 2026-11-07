@@ -29,7 +29,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 - **Files by drag and drop**: drop any file on the chat to attach it. On another machine, it's copied there first.
 - **Live progress**: while the agent works, its reply appears as it's written. The command or tool it's running shows too, with its output so far and how long it's been running.
 - **Formatted replies**: markdown with headings, lists, tables and code blocks, and text you can select and copy. Replies are formatted while they stream, too.
-- **Code blocks you can use**: every code block has **Copy** and **Play** buttons. Play puts the code in the message box, so a suggested command is one Enter away.
+- **Code blocks you can use**: every code block has **Copy** and **Play** buttons. With a terminal split beside the chat, Play runs shell code there (the one you clicked last); otherwise it puts the code in the message box, so a suggested command is one Enter away.
 - **Tool calls folded away**: a turn's tool calls collapse into one line ("4 tool calls · Bash, Read, Edit"). Click it to see each call with its output and any images.
 - **Questions as buttons**: when the agent asks for permission or asks you something, the choices appear as buttons you click. The same goes for the terminal's own pickers (`/theme`, `/export`, Codex's `/permissions`…).
 - **Messages queued, not lost**: what you send while the agent works shows at once as a queued bubble. With Claude you can **Send now** (interrupt) or **Edit** it back into the box.

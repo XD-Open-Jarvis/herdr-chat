@@ -82,6 +82,17 @@ const modeOf = (screen) => /accept edits on/i.test(screen) ? "acceptEdits" : /pl
 // Hints a terminal shows while one of its pickers or panels is open.
 const DIALOG = /(esc to (cancel|close|exit|go back|dismiss)|enter to (select|confirm|continue|save|apply)|to navigate|↑\/↓|↑↓|(?<!shift\+)tab to switch|space to (toggle|select)|press esc|esc back|enter continue|\besc close\b)/i;
 
+// Code blocks a shell can run as they are: ▶ runs these in a console beside the chat.
+const SHELL_LANGS = new Set(["", "sh", "bash", "zsh", "fish", "shell", "console", "shell-session", "terminal", "powershell", "pwsh", "ps1", "ps", "cmd", "bat", "batch", "nu"]);
+
+// The commands in a shell block, without the "$ " prompts a session transcript shows.
+function shellCommands(code) {
+  const lines = code.split("\n");
+  const prompted = lines.filter((l) => /^\s*[$%>]\s/.test(l));
+  // A transcript (prompts and output): only the prompted lines are commands.
+  return (prompted.length ? prompted.map((l) => l.replace(/^\s*[$%>]\s/, "")) : lines).join("\n").trim();
+}
+
 // A reply cut into markdown and fenced code blocks: [{ md } | { code, lang, fence }].
 // Fences may be indented (a block inside a list item); its lines lose that indent.
 function splitCode(text) {
@@ -319,8 +330,33 @@ export default class Chat extends View {
       .child(svg(`mods/chat/icons/${icon}.svg`).size(12));
   }
 
+  // A terminal beside the chat that isn't its agent (a shell split next to it):
+  // the one focused last, else the first. Shell code blocks run there.
+  shellPane() {
+    const mine = this.myPane();
+    if (!mine) return null;
+    const shells = panes().filter((p) => p.tab === mine.tab && p.terminal && p.terminal !== this.term && !p.program?.agent && !p.status);
+    const focused = shells.find((p) => p.focused);
+    if (focused) this.lastConsole = focused.terminal;
+    return shells.find((p) => p.terminal === this.lastConsole) ?? shells[0] ?? null;
+  }
+
+  // Runs a code block in the console: pasted and entered, like typing it there.
+  runInConsole(con, code, id, cx) {
+    this.ran = id;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const r = await hc(["send", con.terminal, shellCommands(code)]);
+      if (r.code !== 0) this.error = `Couldn't run it in ${con.terminal}: ${r.stderr.trim() || "hc send failed"}`;
+      await exec("sh", ["-c", "sleep 1.5"]);
+      if (this.ran === id) this.ran = null;
+      cx.notify();
+    });
+  }
+
   // A reply: its markdown, with each code block drawn on its own so it gets
-  // a Copy button and a Play button (put it in the message box to send).
+  // a Copy button and a Play button: shell code runs in a console beside the
+  // chat when one is open; otherwise Play puts the code in the message box.
   reply(e, t) {
     const parts = splitCode(e.text ?? "");
     if (parts.length === 1 && parts[0].md != null) return div().w_full().child(this.markdown(e.key, e.text));
@@ -328,6 +364,8 @@ export default class Chat extends View {
       if (p.md != null) return div().w_full().child(this.markdown(`${e.key}-${n}`, p.md));
       const id = `${e.key}-${n}`;
       const done = this.copied === id;
+      const con = SHELL_LANGS.has(p.lang.toLowerCase()) ? this.shellPane() : null;
+      const conName = con && ((con.program?.shell && con.program.name) || con.title || con.terminal);
       const btn = (name, icon, tip, action) => div().id(`${name}-${id}`).size(26).flex().items_center().justify_center().rounded(6)
         .cursor_pointer().bg(t.background).border_1().border_color(t.border).text_color(t.muted)
         .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip)
@@ -338,12 +376,14 @@ export default class Chat extends View {
         .child(h_flex().absolute().top(6).right(6).gap(4).items_center()
           .when(Boolean(p.lang), (el) => el.child(div().pr(4).text_size(11).text_color(t.dim).child(p.lang)))
           .child(btn("copy", done ? "check" : "copy", done ? "Copied" : "Copy", (_e, cx) => this.copyOut(p.code, id, cx)))
-          .child(btn("play", "play", "Put in the message box", (_e, cx) => {
-            this.input.set_value("");
-            this.input.replace(p.code);
-            this.input.focus();
-            cx.notify();
-          })));
+          .child(con
+            ? btn("play", this.ran === id ? "check" : "play", this.ran === id ? `Sent to ${conName}` : `Run in ${conName} (${con.terminal})`, (_e, cx) => this.runInConsole(con, p.code, id, cx))
+            : btn("play", "play", "Put in the message box", (_e, cx) => {
+              this.input.set_value("");
+              this.input.replace(p.code);
+              this.input.focus();
+              cx.notify();
+            })));
     }));
   }
 

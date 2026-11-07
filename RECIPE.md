@@ -90,6 +90,7 @@ The terminal stays one click away.
   - The chat pane's × asks whether to end the agent ("End agent" closes both the chat and the terminal; "Keep running" closes only the chat).
   - The terminal's × asks the same question ("Hide terminal" keeps it running).
   - With the terminal hidden, End agent kills it, and Keep running brings it back before closing the chat.
+- **Running code**: each code block has Copy and Play. When a terminal that isn't the agent's is open in the chat's tab, Play on a shell block (no language, `sh`, `bash`, `zsh`, `console`, `powershell`…) sends it there with `hc send` (pasted, then Enter) and shows ✓ for a moment. It uses the terminal focused last, else the first one. In a transcript, only the `$ ` lines run, without the prompt. Other languages, or no such terminal, put the code in the message box instead.
 - **Splitting beside the chat**: the chat header's split buttons open a terminal next to the chat. If the chat is zoomed over its agent, the agent's terminal is hidden first, so only the new terminal joins the chat.
   - If the terminal ends anyway, the chat shows "This agent's terminal has ended." with **Close chat**.
 
