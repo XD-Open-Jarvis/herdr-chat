@@ -55,7 +55,7 @@ cp layouts/chat.json ~/.config/herdr-app/layouts/
 herdr-app do layout.switch '{"name":"chat"}'
 ```
 
-Then merge the keys into `~/.config/herdr-app/keys.json`: `keys.json` on macOS (⌘N for New chat), `keys.linux-windows.json` on Linux and Windows (Ctrl+N). Ctrl+N then no longer reaches terminal programs, where shells use it for the next history line.
+Then merge `keys.json` into `~/.config/herdr-app/keys.json`. Its `secondary-n` is New chat on ⌘N on macOS and Ctrl+N on Linux and Windows. On Linux and Windows, Ctrl+N then no longer reaches terminal programs, where shells use it for the next history line.
 
 **Requirements:**
 - `python3`, and `claude` and/or `codex`, on the machine where the agents run.
@@ -75,7 +75,7 @@ To keep your own layout instead, point its pane header at `chat-pane` and its ta
 | `mods/chat-tabs` | The tab bar with a **Move to chat** button |
 | `mods/spaces-chat` | The spaces sidebar with **New chat there** |
 | `layouts/chat.json` | Herdr's main layout, using the mods above |
-| `keys.json`, `keys.linux-windows.json` | New chat on ⌘N (macOS) or Ctrl+N (Linux and Windows) |
+| `keys.json` | New chat on ⌘N (macOS) or Ctrl+N (Linux and Windows), through `secondary-n` |
 
 ## License
 

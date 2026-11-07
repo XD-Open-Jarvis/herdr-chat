@@ -136,7 +136,7 @@ The terminal stays one click away.
 - **`mods/chat-tabs`** leaves settled tabs out unless one is shown.
 - **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Move to chat button. It splits a chat pane to the right of the tab's agent with `run("pane.split")`, then zooms it once it shows up in `panes()`.
 - **`mods/spaces-chat`**: a copy of the shipped `spaces` sidebar whose + opens the New chat form.
-- **`keys.json`** (macOS): `cmd-n` → `mod.open:chat`. **`keys.linux-windows.json`**: `ctrl-n` → `mod.open:chat`.
+- **`keys.json`**: `secondary-n` → `mod.open:chat`. `secondary` is ⌘ on macOS and Ctrl on Linux and Windows, so one file fits every platform.
 
 ## Watch out
 
