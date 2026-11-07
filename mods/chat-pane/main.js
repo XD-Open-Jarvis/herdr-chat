@@ -37,8 +37,10 @@ export default class Pane extends View {
   closePane(p) {
     const inTab = panes().filter((x) => x.tab === p.tab && x.pane !== p.pane);
     // The agent's terminal, or its chat: either one closing ends the pair.
-    const chat = p.terminal ? inTab.find((x) => x.mod === "chat") : null;
-    const agent = p.mod === "chat" ? inTab.find((x) => x.terminal && x.program?.agent) ?? inTab.find((x) => x.terminal) : null;
+    // Plain shells split beside them close like any other pane.
+    const isAgent = (x) => x.terminal && (x.program?.agent || x.status);
+    const chat = isAgent(p) ? inTab.find((x) => x.mod === "chat") : null;
+    const agent = p.mod === "chat" ? inTab.find(isAgent) : null;
     if (!chat && !agent) return run("pane.close", { pane: p.pane });
     const question = chat ? { ask: p.pane, chat: chat.pane } : { ask: agent.pane, chat: p.pane, from: "chat" };
     openOverlay({ mod: "chat-pane", kind: "dialog", width: 420, height: 170, props: question });

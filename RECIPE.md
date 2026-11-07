@@ -168,4 +168,4 @@ The terminal stays one click away.
   - `/memory` → Open shows the file in the editor dialog.
 - **Terminal pickers**: `/theme` shows the theme picker in the chat; ↓ moves its highlight in the terminal; Esc closes both.
 - **Emoji**: `hi :ta` shows 🎉 🌮 🚕…; Enter gives `hi 🎉 `.
-- **Closing**: the chat's × → End agent closes the chat and its terminal, and the tab if it was the last pane.
+- **Closing**: the chat's × → End agent closes the chat and its terminal, and the tab if it was the last pane. A plain shell split beside them closes without asking.
