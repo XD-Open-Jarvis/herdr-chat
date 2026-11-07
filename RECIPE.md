@@ -15,7 +15,7 @@ The terminal stays one click away.
 ## What you see
 
 - **The chat pane** (`chat`). It opens zoomed over the agent's terminal in the same tab.
-  - **Header** (32 px, `chrome` background): the agent's name ("Claude Code" or "Codex"), the session title, the terminal address, and on the right a search icon and a **Show terminal / Hide terminal** button.
+  - **Header** (32 px, `chrome` background): the agent's name ("Claude Code" or "Codex"), the session title, the terminal address, and on the right a search icon and a **Show terminal / Hide terminal** button. Hide terminal moves only the agent's terminal out of the tab; other terminals split beside the chat stay. Show terminal brings it back to the right of the chat.
   - **Conversation**: centered in a column up to 900 px wide.
     - Your messages are `raised` bubbles on the right, sized to their longest line.
     - Replies are plain markdown on the left.
@@ -89,6 +89,8 @@ The terminal stays one click away.
 - **Closing**:
   - The chat pane's × asks whether to end the agent ("End agent" closes both the chat and the terminal; "Keep running" closes only the chat).
   - The terminal's × asks the same question ("Hide terminal" keeps it running).
+  - With the terminal hidden, End agent kills it, and Keep running brings it back before closing the chat.
+- **Splitting beside the chat**: the chat header's split buttons open a terminal next to the chat. If the chat is zoomed over its agent, the agent's terminal is hidden first, so only the new terminal joins the chat.
   - If the terminal ends anyway, the chat shows "This agent's terminal has ended." with **Close chat**.
 
 ## Built from
@@ -129,6 +131,8 @@ The terminal stays one click away.
   - `python3`, `claude` and/or `codex`, `sh`.
   - For the desktop: `pbcopy` and `osascript` (macOS); `wl-copy`, `xclip`, `xsel` or KDE Klipper over `qdbus`, `kdialog` or `zenity`, and `xdg-open` (Linux).
 - **`mods/chat-pane`**: a copy of the shipped `pane` header whose × asks before ending an agent. Its method is called `closePane`, not `close`.
+- **Hiding the terminal** (`backstage.js`, one copy in `chat` and one in `chat-pane`; a mod can't import another mod's files): `terminal.park` takes the pane and the `herdr.space`/`herdr.tab` labels away and the terminal keeps running. `hc label <t> herdr.space=<space> herdr.tab=<new id>` then adopts it into a new tab, which `tab.settle` puts away. The label `chat.tab` on the terminal remembers the chat's tab. Showing it labels it back into that tab. The chat settles the agent's tab again whenever something (the Agents list, a finished reply) brings it back and it isn't shown.
+- **`mods/chat-tabs`** leaves settled tabs out unless one is shown.
 - **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Move to chat button. It splits a chat pane to the right of the tab's agent with `run("pane.split")`, then zooms it once it shows up in `panes()`.
 - **`mods/spaces-chat`**: a copy of the shipped `spaces` sidebar whose + opens the New chat form.
 - **`keys.json`** (macOS): `cmd-n` → `mod.open:chat`. **`keys.linux-windows.json`**: `ctrl-n` → `mod.open:chat`.
@@ -136,6 +140,7 @@ The terminal stays one click away.
 ## Watch out
 
 - **Never name a View method `close`.** Herdr calls `close(cx)` itself when a copy goes away. A header whose close button was named `close` closed the focused pane, and with it chats and agents.
+- **Wait for `terminal.park` to land before relabelling.** It answers `pending` and drops the labels once the machine replies; labels set before that are lost. Poll `hc get <t> --json` until `herdr.tab` is gone.
 - **`run()` calls from a mod aren't ordered.** For steps that must happen in order (unzoom, focus, then swap), run `herdr-app do …` through `exec`, one after another.
 - **The message box keeps ↑/↓ and Esc for itself.** Bind them with `cx.bind_keys` to actions under `"<YourContext> > Input"`, and set that `key_context` on the box's wrapper only while a menu is open. Tab and letters reach `on_key_down`; arrows and Esc don't.
 - **Enter puts its line break into the box (at the cursor) before `submit` fires.** Strip line breaks before matching the text. After `set_value`, the cursor sits at the start: use `set_selected_range`, or `set_value("")` and then `replace(text)`.
@@ -170,3 +175,4 @@ The terminal stays one click away.
 - **Terminal pickers**: `/theme` shows the theme picker in the chat; ↓ moves its highlight in the terminal; Esc closes both.
 - **Emoji**: `hi :ta` shows 🎉 🌮 🚕…; Enter gives `hi 🎉 `.
 - **Closing**: the chat's × → End agent closes the chat and its terminal, and the tab if it was the last pane. A plain shell split beside them closes without asking.
+- **Hide terminal with a shell beside the chat**: only the agent's terminal goes; the shell stays, and the tab bar shows no extra tab. Show terminal puts it back right of the chat. With the chat zoomed, the header's split button opens a shell beside the chat and the agent stays hidden.

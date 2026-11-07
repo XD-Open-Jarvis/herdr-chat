@@ -19,6 +19,11 @@ function isAgent(pane) {
   return what.includes("claude") || what.includes("codex");
 }
 
+// An agent terminal that moved out of its chat's tab (the chat's Hide terminal).
+function hasChat(pane) {
+  return Boolean(terminals().find((x) => x.address === pane.terminal)?.labels?.["chat.tab"]);
+}
+
 export default class Tabs extends View {
   init() {
     this.pressed = null;
@@ -60,7 +65,8 @@ export default class Tabs extends View {
     const inTab = panes().filter((p) => p.tab === tab?.id);
     return {
       chat: inTab.find((p) => p.mod === "chat"),
-      agent: inTab.find((p) => p.focused && isAgent(p)) ?? inTab.find(isAgent),
+      // Not an agent whose chat it hid from (Hide terminal): that one has a chat.
+      agent: inTab.find((p) => p.focused && isAgent(p) && !hasChat(p)) ?? inTab.find((p) => isAgent(p) && !hasChat(p)),
     };
   }
 
@@ -82,7 +88,8 @@ export default class Tabs extends View {
   render() {
     const t = theme();
     const space = spaces().find(p => p.active);
-    const shown = space?.tabs ?? [];
+    // Settled tabs are put away (a chat's hidden agent terminal lives in one) unless shown.
+    const shown = (space?.tabs ?? []).filter((x) => !x.settled || x.active);
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);

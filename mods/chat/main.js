@@ -22,6 +22,7 @@ import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, openFile, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
+import { herdr, chatTab, away, hide, show } from "./backstage.js";
 
 const ASK_FIRST = "Answer the question above first.";
 
@@ -55,14 +56,6 @@ pane=$(printf '%s\n' "$split" | sed -n 's/.*"pane": *"\\([^"]*\\)".*/\\1/p')
 [ -n "$pane" ] && "$H" do pane.zoom "{\\"pane\\":\\"$pane\\"}" >/dev/null
 echo "$term"`;
 
-// An app command through the CLI, for the ids it answers with (run() returns none).
-async function herdr(command, args) {
-  const r = await exec("sh", ["-c", 'H=$(command -v herdr-app || echo "$HOME/.local/bin/herdr-app"); exec "$H" do "$1" "$2"', "sh", command, JSON.stringify(args)]);
-  let out = null;
-  try { out = JSON.parse(r.stdout); } catch {}
-  if (r.code !== 0 || !out || out.error) throw new Error(out?.error ?? (r.stderr.trim() || `${command} failed`));
-  return out;
-}
 
 // Claude Code's permission modes, in its shift+tab order, and how its footer names them.
 const MODES = [
@@ -224,10 +217,18 @@ export default class Chat extends View {
     return id ? (m ? `${m}/${id}` : id) : null;
   }
 
-  // This chat's pane when it sits in the agent's tab.
+  // This chat's pane: in the agent's tab, or the tab the agent stepped out of.
   myPane() {
-    const tab = this.label("tab");
-    return tab ? panes().find((p) => p.mod === "chat" && p.tab === tab) ?? null : null;
+    for (const tab of [this.label("tab"), chatTab(this.terminal())]) {
+      const mine = tab && panes().find((p) => p.mod === "chat" && p.tab === tab);
+      if (mine) return mine;
+    }
+    return null;
+  }
+
+  // Whether the agent's terminal is out of sight: in a tab of its own, or behind the zoomed chat.
+  termHidden(mine) {
+    return away(this.terminal()) || (mine.zoomed && panes().some((p) => p.terminal === this.term && p.tab === mine.tab));
   }
 
   // The agent's terminal has ended (its pane was closed, or it was killed).
@@ -1013,7 +1014,7 @@ export default class Chat extends View {
       .child(h_flex().gap(8).items_center()
         .child(svg("mods/chat/icons/terminal.svg").size(14).text_color(t.dim))
         .child(div().flex_1().text_size(12.5).font_semibold().child(P.seen ? `${P.command} · in the terminal` : `${P.command} · opening…`))
-        .child(this.button("panel-term", "Show terminal", (_e, cx) => this.toggleTerminal(cx), t))
+        .child(this.button("panel-term", "Show terminal", (_e, cx) => this.showTerminal(cx), t))
         .child(this.button("panel-close", "Close", (_e, cx) => { this.panelKeys("esc"); this.panel = null; cx.notify(); }, t)))
       .when(Boolean(q), (el) => el
         .when(Boolean(q.question), (d) => d.child(div().text_size(12.5).child(this.markdown("panel-q", q.question))))
@@ -1061,6 +1062,10 @@ export default class Chat extends View {
     const term = this.terminal();
     const mine = this.myPane();
     if (mine) this.pane = mine.pane;
+    // The agent's own tab, while it's away from the chat: showing it (from the
+    // Agents list) or the agent needing you brings it back; put it away again after.
+    const own = away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
+    if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
     const kind = agentKind(term);
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
@@ -1442,18 +1447,52 @@ export default class Chat extends View {
   // Shows the agent's terminal to the right of the chat, or hides it again.
   toggleTerminal(cx) {
     const mine = this.myPane();
+    if (mine && !this.termHidden(mine)) return this.hideTerminal(mine, cx);
+    this.showTerminal(cx);
+  }
+
+  // Hiding moves only the agent's terminal away (see backstage.js): other
+  // terminals split beside the chat stay.
+  hideTerminal(mine, cx) {
+    if (this.moving) return;
+    this.moving = true;
+    cx.spawn(async (cx) => {
+      try { await hide(this.terminal(), mine.tab); } catch (e) { this.error = `Couldn't hide the terminal: ${e?.message ?? e}`; }
+      this.moving = false;
+      cx.notify();
+    });
+  }
+
+  showTerminal(cx) {
+    const mine = this.myPane();
     if (!mine) {
       if (this.terminal()?.state === "live") run("terminal.peek", { terminal: this.term });
       return;
     }
-    const tp = mine.zoomed && panes().find((p) => p.terminal === this.term && p.tab === mine.tab);
-    if (!tp) return run("pane.zoom", { pane: mine.pane });
+    if (!this.termHidden(mine)) {
+      const tp = panes().find((p) => p.terminal === this.term);
+      return tp && run("pane.focus", { pane: tp.pane });
+    }
+    if (this.moving) return;
+    this.moving = true;
     // One after another through the CLI: a swap sent before the zoom lands
     // does nothing. The swap is a no-op when the terminal is already right.
-    cx.spawn(async () => {
-      for (const [command, args] of [["pane.zoom", { pane: mine.pane }], ["pane.focus", { pane: tp.pane }], ["pane.swap", { direction: "right" }]]) {
-        try { await herdr(command, args); } catch {}
-      }
+    cx.spawn(async (cx) => {
+      try {
+        if (mine.zoomed) await herdr("pane.zoom", { pane: mine.pane });
+        if (away(this.terminal())) await show(this.terminal());
+        let tp = null;
+        for (let i = 0; i < 30 && !tp; i++) {
+          tp = panes().find((p) => p.terminal === this.term && p.tab === mine.tab);
+          if (!tp) await exec("sh", ["-c", "sleep 0.1"]);
+        }
+        if (tp) {
+          await herdr("pane.focus", { pane: tp.pane });
+          await herdr("pane.swap", { direction: "right" }).catch(() => {});
+        }
+      } catch (e) { this.error = `Couldn't show the terminal: ${e?.message ?? e}`; }
+      this.moving = false;
+      cx.notify();
     });
   }
 
@@ -1770,7 +1809,7 @@ export default class Chat extends View {
   header(term, t) {
     const { kind } = this.current();
     const mine = this.myPane();
-    const termLabel = mine ? (mine.zoomed ? "Show terminal" : "Hide terminal") : "Terminal";
+    const termLabel = mine ? (this.termHidden(mine) ? "Show terminal" : "Hide terminal") : "Terminal";
     const btn = (id, text, action) => div().id(id).flex_none().px(8).py(3).rounded(6).cursor_pointer().text_color(t.muted)
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
     return v_flex().flex_none().border_b(1).border_color(t.border).bg(t.chrome)
@@ -1923,7 +1962,7 @@ export default class Chat extends View {
     return v_flex().p(12).gap(10).rounded(10).border_1().border_color(t.blocked).bg(t.background)
       .child(h_flex().gap(8).items_center()
         .child(div().flex_1().font_semibold().text_size(12.5).text_color(t.blocked).child(title))
-        .child(this.button("go-term2", "Show terminal", (_e, cx) => this.toggleTerminal(cx), t)))
+        .child(this.button("go-term2", "Show terminal", (_e, cx) => this.showTerminal(cx), t)))
       .when(Boolean(q?.question), (el) => el.child(div().text_size(12.5).child(this.markdown("question", q.question))))
       .when(Boolean(q), (el) => el.child(v_flex().gap(6).children(q.options.map((o, n) =>
         h_flex().id(`choice-${n}`).px(12).py(8).gap(10).rounded(8).cursor_pointer().border_1()

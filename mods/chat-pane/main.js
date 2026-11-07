@@ -6,10 +6,13 @@
 // Closing an agent's terminal that has a chat beside it (the close button)
 // asks first: it would end the agent.
 // The question is this mod opened as a dialog, with props { ask, chat }.
+// Splitting a zoomed chat keeps its agent's terminal hidden: it moves out of
+// the tab (backstage.js), so only the new terminal joins the chat.
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { panes, props, run, theme, home, openOverlay, closeOverlay } from "herdr";
+import { panes, props, run, theme, home, terminals, openOverlay, closeOverlay } from "herdr";
+import { herdr, away, hide, show } from "./backstage.js";
 
 
 function icon(p, size, color) {
@@ -40,10 +43,33 @@ export default class Pane extends View {
     // Plain shells split beside them close like any other pane.
     const isAgent = (x) => x.terminal && (x.program?.agent || x.status);
     const chat = isAgent(p) ? inTab.find((x) => x.mod === "chat") : null;
-    const agent = p.mod === "chat" ? inTab.find(isAgent) : null;
+    const agent = p.mod === "chat" ? this.agentOf(p) : null;
     if (!chat && !agent) return run("pane.close", { pane: p.pane });
-    const question = chat ? { ask: p.pane, chat: chat.pane } : { ask: agent.pane, chat: p.pane, from: "chat" };
+    const question = chat ? { ask: p.pane, chat: chat.pane } : { ask: agent.pane ?? null, term: agent.terminal, chat: p.pane, from: "chat" };
     openOverlay({ mod: "chat-pane", kind: "dialog", width: 420, height: 170, props: question });
+  }
+
+  // A chat pane's agent: its terminal's pane in the tab, or the terminal it hid away.
+  agentOf(chat) {
+    const here = panes().find((x) => x.tab === chat.tab && x.terminal && (x.program?.agent || x.status));
+    if (here) return here;
+    const tab = chat.tab.split("/").pop();
+    const term = terminals().find((x) => x.state === "live" && x.labels?.["chat.tab"] === tab && away(x));
+    return term ? { terminal: term.address, pane: panes().find((x) => x.terminal === term.address)?.pane } : null;
+  }
+
+  // Splits beside a zoomed chat without showing its agent: the agent's terminal
+  // leaves the tab first, then the chat unzooms beside the new terminal.
+  split(p, direction, cx) {
+    const agent = p.mod === "chat" && p.zoomed ? panes().find((x) => x.tab === p.tab && x.terminal && (x.program?.agent || x.status)) : null;
+    if (!agent) return run("pane.split", { direction, pane: p.pane });
+    cx.spawn(async () => {
+      try {
+        await hide(terminals().find((x) => x.address === agent.terminal), p.tab);
+        await herdr("pane.zoom", { pane: p.pane });
+      } catch {}
+      run("pane.split", { direction, pane: p.pane });
+    });
   }
 
   me() {
@@ -92,10 +118,17 @@ export default class Pane extends View {
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
       .when(st === "done", el => el.child(div().size(7).flex_none().rounded(4).bg(t.done)))
       .when(this.hovered, el => el
-        .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
-        .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
+        .child(this.splitButton(t, p, "right"))
+        .child(this.splitButton(t, p, "down"))
         .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
         .child(this.closeButton(t, p)));
+  }
+
+  splitButton(t, p, direction) {
+    return div().id(`ph-${direction[0]}-${p.pane}`).p(3).rounded(4).text_color(t.dim)
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click((_e, cx) => { cx.stop_propagation(); this.split(p, direction, cx); })
+      .child(svg(`mods/chat-pane/split-${direction}.svg`).size(14));
   }
 
   closeButton(t, p) {
@@ -105,17 +138,27 @@ export default class Pane extends View {
       .child(svg("mods/chat-pane/close.svg").size(14));
   }
 
-  answer(what) {
-    const { overlay, ask, chat } = props();
+  answer(what, cx) {
+    const { overlay, ask, term, chat } = props();
     closeOverlay(overlay);
+    const chatPane = panes().find((x) => x.pane === chat);
+    const agentTerm = () => terminals().find((x) => x.address === (term ?? panes().find((x) => x.pane === ask)?.terminal));
+    // Its terminal hid away from the chat (Hide terminal): it's in a tab of its own.
+    const hidden = away(agentTerm());
     if (what === "end") {
       // Ends the agent and closes its chat with it: the whole tab when that's all it holds.
+      if (hidden) { run("terminal.kill", { terminal: agentTerm().address }); run("pane.close", { pane: chat }); return; }
       const tab = panes().find((x) => x.pane === ask)?.tab;
       if (tab && !panes().some((x) => x.tab === tab && x.pane !== ask && x.pane !== chat)) run("tab.close", { id: tab, confirmed: true });
       else { run("pane.close", { pane: ask }); run("pane.close", { pane: chat }); }
     }
-    else if (what === "hide" && !panes().find((x) => x.pane === chat)?.zoomed) run("pane.zoom", { pane: chat });
-    else if (what === "keep") run("pane.close", { pane: chat });
+    // Only the agent's terminal goes; other panes beside the chat stay.
+    else if (what === "hide" && chatPane) cx.spawn(async () => { try { await hide(agentTerm(), chatPane.tab); } catch {} });
+    // The chat goes and its terminal takes its place, back from its own tab if it hid.
+    else if (what === "keep") {
+      if (!hidden) return run("pane.close", { pane: chat });
+      cx.spawn(async () => { try { await show(agentTerm()); } catch {} run("pane.close", { pane: chat }); });
+    }
   }
 
   question(t) {
@@ -123,11 +166,11 @@ export default class Pane extends View {
     const button = (id, label, primary, what) =>
       h_flex().id(id).h(32).px(14).items_center().rounded(8).border_1().border_color(primary ? t.solid : t.input)
         .bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground)
-        .cursor_pointer().hover((s) => s.opacity(0.88)).on_click(() => this.answer(what)).child(label);
+        .cursor_pointer().hover((s) => s.opacity(0.88)).on_click((_e, cx) => this.answer(what, cx)).child(label);
     return v_flex().id("ask").track_focus(this.handle)
       .on_key_down((e, cx) => {
-        if (e.key === "enter") this.answer("end");
-        else if (e.key === "escape") this.answer("cancel");
+        if (e.key === "enter") this.answer("end", cx);
+        else if (e.key === "escape") this.answer("cancel", cx);
         else return;
         cx.stop_propagation();
       })
