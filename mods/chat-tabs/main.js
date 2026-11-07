@@ -24,6 +24,15 @@ function hasChat(pane) {
   return Boolean(terminals().find((x) => x.address === pane.terminal)?.labels?.["chat.tab"]);
 }
 
+// The tab of the chat that agent terminal stepped out of, as tabs are named in
+// the lists (with the machine in front for another machine's terminal).
+function chatTabOf(pane) {
+  const term = pane.terminal && terminals().find((x) => x.address === pane.terminal);
+  const id = term?.labels?.["chat.tab"];
+  if (!id) return null;
+  return term.address.includes("/") ? `${term.address.split("/")[0]}/${id}` : id;
+}
+
 export default class Tabs extends View {
   init() {
     this.pressed = null;
@@ -61,9 +70,14 @@ export default class Tabs extends View {
   // "Move to chat": shown while the tab has a Claude or Codex terminal and no
   // chat. Opens one beside the agent's terminal (the focused one first) and
   // zooms it. Once there's a chat, its own header shows or hides the terminal.
-  chatIn(tab) {
+  // "Back to chat": shown in the tab of an agent terminal that Hide terminal
+  // moved out of its chat (Herdr shows that tab when the agent is picked from
+  // the lists). Goes to the chat's tab and puts this one away again.
+  chatIn(tab, space) {
     const inTab = panes().filter((p) => p.tab === tab?.id);
+    const back = inTab.map(chatTabOf).find((id) => id && id !== tab?.id && space?.tabs?.some((x) => x.id === id));
     return {
+      back,
       chat: inTab.find((p) => p.mod === "chat"),
       // Not an agent whose chat it hid from (Hide terminal): that one has a chat.
       agent: inTab.find((p) => p.focused && isAgent(p) && !hasChat(p)) ?? inTab.find((p) => isAgent(p) && !hasChat(p)),
@@ -131,8 +145,13 @@ export default class Tabs extends View {
         }).child(svg(icon).size(14)).child(label);
     };
     const tab = shown.find((c) => c.active);
-    const { chat, agent } = this.chatIn(tab);
+    const { chat, agent, back } = this.chatIn(tab, space);
     const move = Boolean(agent && !chat);
+    const backButton = h_flex().id("panel-back-chat").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+      .text_size(12).bg(t.chrome).text_color(t.accent).border_1().border_color(t.accent)
+      .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
+      .on_click(() => { run("tab.select", { id: back }); run("tab.settle", { id: tab.id }); })
+      .child(svg("mods/chat-tabs/chat.svg").size(14)).child("Back to chat");
     const chatButton = h_flex().id("panel-chat").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
       .text_size(12).bg(t.chrome).text_color(t.accent).border_1().border_color(t.accent)
       .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
@@ -144,6 +163,7 @@ export default class Tabs extends View {
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
       .when(move, el => el.child(chatButton))
+      .when(Boolean(back && !chat), el => el.child(backButton))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/chat-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
