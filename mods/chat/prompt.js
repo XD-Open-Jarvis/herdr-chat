@@ -6,6 +6,19 @@ const NUMBER = /^\s*\d+[.)]\s+/;
 const HINT = /(Enter to (confirm|select)|Esc to (cancel|exit)|↑\/↓|to navigate)/i;
 const RULE = /^\s*[─━—\-▔▁═]{8,}\s*$/;
 
+// A menu waiting at the bottom of the screen: its hint line ("Enter to confirm ·
+// Esc to cancel") is among the last lines. "form" when ←/→ change its values,
+// which a pick-one list can't show.
+export function menuAtBottom(screen) {
+  let lines = (screen ?? "").split("\n").filter((l) => l.trim());
+  // Claude keeps its input box (a rule, ❯, a rule, its footer) under the menu.
+  const rules = lines.flatMap((l, i) => (RULE.test(l) ? [i] : []));
+  const box = rules.at(-2);
+  if (box !== undefined && lines.length - box <= 6 && /^\s*❯/.test(lines[box + 1] ?? "")) lines = lines.slice(0, box);
+  const hint = lines.slice(-2).find((l) => HINT.test(l));
+  return hint ? (/←|→|to change/.test(hint) ? "form" : "menu") : null;
+}
+
 // { question, options: [text], selected } or null when the screen has no menu.
 export function parsePrompt(screen) {
   // A ✔ marks the current choice; read it as an indent, so its line lines up.

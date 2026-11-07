@@ -55,7 +55,7 @@ The terminal stays one click away.
 
 ## How it behaves
 
-- **Agent status**: *working* shows the spinner line and the streaming reply; the send button turns into ■ Stop. *blocked* shows the agent's question as clickable choices above the message box. *idle* and *done* show nothing extra.
+- **Agent status**: *working* shows the spinner line and the streaming reply; the send button turns into ■ Stop. *blocked* shows the agent's question as clickable choices above the message box. *idle* and *done* show nothing extra, unless the agent left a menu waiting on its screen (Claude's "Teach auto mode about your environment?" offer, its auto-mode setup form): the chat reads the screen every 2 s while idle and shows that menu the same way, and Send waits with "Answer the question above first."
 - **Sending**:
   - Enter sends (Shift+Enter for a new line).
   - A message sent while the agent works shows as a faded "Queued" bubble; with Claude, as "Steering · read at its next step".
@@ -123,6 +123,7 @@ The terminal stays one click away.
   - `hc send`, `hc keys`, `hc read`, `hc interrupt`.
   - `pane.split`, `pane.zoom`, `pane.focus`, `pane.swap`, `pane.close`, `tab.close`, `layout.select` and `layout.show` for Changes.
   - `openOverlay` for `chat-file`, `notify`, `cx.bind_keys` with key contexts `ChatMenu`, `ChatMenuNav`, `ChatPanel` and `ChatRoot`.
+- **Menus while idle**: Claude shows some menus without reporting *blocked*. A menu counts only when its hint line ("Enter to confirm · Esc to cancel") is the last thing above Claude's input box, so a reply that quotes one isn't taken for a question. A form whose hint says "←/→ to change" shows its screen with ↑ ↓ ← → Enter Esc keys instead of choices.
 - **Opening on a running agent**: until its log loads, the chat doesn't read the terminal for questions unless the agent is *blocked* or hasn't reported a status yet. Otherwise a numbered list in its last reply shows up as choices.
 - **Programs**:
   - `python3`, `claude` and/or `codex`, `sh`.

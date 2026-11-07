@@ -17,11 +17,13 @@ import { Transcript } from "./parse.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, PICKER, emojiMatches } from "./emoji.js";
-import { parsePrompt, choose } from "./prompt.js";
+import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, openFile, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
+
+const ASK_FIRST = "Answer the question above first.";
 
 const CACHE = "data/chat";
 const PAGE = 60;
@@ -1087,14 +1089,29 @@ export default class Chat extends View {
     // is the conversation, and a numbered list there isn't a question.
     const started = ["working", "idle", "done"].includes(term?.status);
     if (term?.status === "blocked" || (term && !this.t && term.state === "live" && !started)) {
+      this.idleAsk = null;
       cx.spawn(async (cx) => {
         const r = await hc(["read", this.term, "--lines", "40"]);
         this.screen = r.stdout.replace(/\s+$/, "");
         this.trustFolder();
         cx.notify();
       });
+    } else if (this.t && ["idle", "done"].includes(term?.status) && !this.panelLive()) {
+      // A menu the agent opens on its own once a turn ends (an offer, a setup
+      // form) doesn't report "blocked": only the screen shows it.
+      cx.spawn(async (cx) => {
+        const r = await hc(["read", this.term, "--lines", "40"]);
+        const screen = r.stdout.replace(/\s+$/, "");
+        const ask = menuAtBottom(screen);
+        if (!ask && !this.idleAsk) return;
+        if (!ask && this.error === ASK_FIRST) this.error = null;
+        this.idleAsk = ask;
+        this.screen = ask ? screen : null;
+        cx.notify();
+      });
     } else if (this.screen) {
       this.screen = null;
+      this.idleAsk = null;
       cx.notify();
     }
   }
@@ -1297,6 +1314,7 @@ export default class Chat extends View {
     if (cmd?.action && this.hostCommand(cmd, text.replace(/^\/\S+\s*/, ""), cx)) return cx.notify();
     const files = this.attach.map((a) => a.path);
     if (this.dialog) return this.startChat(text, files, cx);
+    if (this.idleAsk) { this.error = ASK_FIRST; return cx.notify(); }
     // A lone "/" would open the terminal's own menu and run its first command.
     if (!this.term || ((!text || text === "/") && !files.length)) { if (!files.length) this.input.set_value(""); return; }
     this.input.set_value("");
@@ -1897,7 +1915,8 @@ export default class Chat extends View {
   // A question on the agent's terminal: its text, and its choices as buttons
   // that move the selection there and confirm. Without a menu, the screen itself.
   promptBox(title, t) {
-    const q = parsePrompt(this.screen);
+    const form = this.idleAsk === "form";
+    const q = form ? null : parsePrompt(this.screen);
     const key = (k, label) => this.button(`key-${k}`, label, () => hc(["keys", this.term, k]), t);
     const mono = settings().font_family;
     const lines = (this.screen ?? "").split("\n").filter((l, i, a) => l.trim() || (i > 0 && a[i - 1].trim()));
@@ -1910,14 +1929,16 @@ export default class Chat extends View {
         h_flex().id(`choice-${n}`).px(12).py(8).gap(10).rounded(8).cursor_pointer().border_1()
           .border_color(n === q.selected ? t.accent : t.border).bg(n === q.selected ? t.selected : t.surface)
           .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { hc(["keys", this.term, ...choose(q.selected, n)]); this.screen = null; cx.notify(); })
+          .on_click((_e, cx) => { hc(["keys", this.term, ...choose(q.selected, n)]); this.screen = this.idleAsk = null; cx.notify(); })
           .child(div().flex_none().w(16).text_color(t.dim).child(String(n + 1)))
           .child(div().flex_1().text_size(12.5).child(o))))))
       .when(!q && lines.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.muted)
         .when(Boolean(mono), (d) => d.font_family(mono))
         .child(this.markdown("screen", "~~~~text\n" + lines.slice(-24).join("\n") + "\n~~~~"))))
       .child(h_flex().gap(6).flex_wrap()
-        .when(!q, (el) => el.child(key("up", "↑")).child(key("down", "↓")).child(key("enter", "Enter")))
+        .when(!q, (el) => el.child(key("up", "↑")).child(key("down", "↓"))
+          .when(form, (el) => el.child(key("left", "←")).child(key("right", "→")))
+          .child(key("enter", "Enter")))
         .child(key("esc", "Esc")));
   }
 
@@ -1975,7 +1996,7 @@ export default class Chat extends View {
       .when(working, (el) => el.child(h_flex().w_full().justify_center().child(h_flex().w_full().max_w(900).px(6).gap(8).items_center().text_size(12).text_color(t.muted)
         .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
         .child(div().flex_1().min_w(0).truncate().child(term.report?.msg || "Working…")))))
-      .when(status === "blocked" && Boolean(this.t), (el) => el.child(h_flex().w_full().justify_center()
+      .when((status === "blocked" || Boolean(this.idleAsk)) && Boolean(this.t), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().w_full().max_w(900).child(this.promptBox("The agent is asking:", t)))))
       .when(Boolean(this.error), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().w_full().max_w(900).px(6).text_size(11.5).text_color(t.blocked).child(this.error))))
