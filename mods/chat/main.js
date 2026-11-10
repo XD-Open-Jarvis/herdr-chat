@@ -1302,8 +1302,7 @@ export default class Chat extends View {
     const waiting = (status === "working" || status === "blocked") && this.inQueue(p);
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
     const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.85));
-    const longest = Math.max(0, ...p.text.split("\n").map((l) => l.length));
-    const w = Math.min(max, Math.max(200, Math.ceil(longest * 7.6) + 32));
+    const w = max;
     const act = (id, label, fn) => div().id(id).px(8).py(2).rounded(6).cursor_pointer().text_color(t.foreground)
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { fn(); cx.notify(); }).child(label);
     return v_flex().w_full().items_end().gap(4).child(
@@ -1598,12 +1597,11 @@ export default class Chat extends View {
 
   entry(e, t, last) {
     if (e.kind === "user") {
-      // A width of its own: with only a max width, the text inside shrinks to
-      // one letter per line when the pane narrows. Sized from the longest line.
+      // Give every user message the same explicit panel-relative width.
+      // Character counts cannot predict rendered Chinese or Markdown widths.
       const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
       const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.85));
-      const longest = Math.max(0, ...(e.text ?? "").split("\n").map((l) => l.length));
-      const w = e.images.length ? max : Math.min(max, Math.ceil(longest * 7.6) + 32);
+      const w = max;
       // On hover, Copy and Edit (back into the message box to change and send
       // again) under the bubble, in a row that's always there.
       const on = this.hovered === e.key && Boolean(e.text);
