@@ -1301,7 +1301,7 @@ export default class Chat extends View {
     const claude = (this.t?.kind ?? agentKind(this.terminal())) === "claude";
     const waiting = (status === "working" || status === "blocked") && this.inQueue(p);
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
-    const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.85));
+    const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.70));
     const w = max;
     const act = (id, label, fn) => div().id(id).px(8).py(2).rounded(6).cursor_pointer().text_color(t.foreground)
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { fn(); cx.notify(); }).child(label);
@@ -1600,7 +1600,7 @@ export default class Chat extends View {
       // Give every user message the same explicit panel-relative width.
       // Character counts cannot predict rendered Chinese or Markdown widths.
       const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
-      const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.85));
+      const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.70));
       const w = max;
       // On hover, Copy and Edit (back into the message box to change and send
       // again) under the bubble, in a row that's always there.
