@@ -2151,7 +2151,7 @@ export default class Chat extends View {
 
   render() {
     if (!this.dialog && !this.myPane()) return v_flex().id("root").size_full().p(20)
-      .child("Chat owner context is missing or ambiguous. Run scripts/install.py --update to migrate this pane; no terminal has been selected.");
+      .child("Chat owner context is missing or ambiguous. Open a new chat from its agent terminal; no terminal has been selected.");
     if (!this.dialog && !this.chatVisible()) return div().id("root").size_full();
     const t = theme();
     const term = this.term ? this.terminal() : null;

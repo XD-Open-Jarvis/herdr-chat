@@ -1,14 +1,15 @@
 # Herdr Chat
 
 Fork additions: persist `terminal` as a machine-local ID and `owner_tab` as the
-owning tab's local ID; the updater also annotates existing records with the local
-`owner_pane`. Match that owner against live chat panes, then qualify the saved
+owning tab's local ID. An explicit local `owner_pane` can disambiguate a pane.
+Match that owner against live chat panes, then qualify the saved
 terminal using the matched pane's current tab prefix. Ignore any old alias saved
 inside `terminal`. Never search globally for a bare terminal or use the active
 machine as an identity hint. Reject missing or ambiguous owner context explicitly.
-The installer patches old Chat props using version-checked `doc.get` / `doc.set`,
-backs up the original document, retries conflicts with a fresh read, and leaves
-all terminals, splits, transcript files and non-Chat fields untouched.
+The installer only copies layout/mod files and merges a non-conflicting shortcut.
+It never reads or writes core session documents. Use `--install` for a fresh
+installation (`--install` refuses occupied names) or `--update` for file-only
+updates with backups. Test a new chat created from the agent's own terminal.
 
 Show the shared segmented header even on a supported terminal
 without a chat pane yet. The first 对话 click creates its chat once, then zooms

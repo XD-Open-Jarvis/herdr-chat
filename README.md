@@ -6,20 +6,24 @@ This fork packages the customized layout used on our Macs. Install the **`custom
 > https://github.com/XD-Open-Jarvis/herdr-chat/tree/customized.
 > Preserve existing layouts, mods and keybindings; ask before replacing conflicts.
 
-For updates on another Mac, clone this branch and use the installer rather than
-copying only a mod or only the layout:
+For a fresh install on another Mac, clone this branch and install all files together:
 
 ```sh
 git clone --depth 1 --branch customized https://github.com/XD-Open-Jarvis/herdr-chat.git
 cd herdr-chat
-python3 scripts/install.py --update
+python3 scripts/install.py --install
 ```
 
 The installer checks all five mods against the installed Herdr runtime first,
 backs up replaced files under `~/.config/herdr-app/backups/`, updates the layout
 and all runtime mod sources together, preserves conflicting shortcuts and selects
-`chat`. It does not restart Herdr or touch transcripts/settings files. It migrates only existing Chat binding props in the versioned core document, with backups. It supports
-`HERDR_APP_HOME` / `--home` for a separate app home.
+`chat`. It does not restart Herdr or alter existing sessions, Chat binding props,
+transcripts or settings. It supports `HERDR_APP_HOME` / `--home` for a separate app home.
+
+If Chat is already installed, use `python3 scripts/install.py --update` to replace
+only its layout/mod files with backups. `--install` refuses existing Chat names.
+Neither mode reads or writes core session documents. Connect the second Mac to
+Mini separately; installing a layout does not establish the connection.
 
 Read-only diagnosis: `python3 scripts/install.py --diagnose` reports the Herdr
 version, missing/outdated runtime files, required header routing and app errors.
@@ -31,13 +35,8 @@ Changes from upstream:
   IDs and owner tab/pane IDs. At runtime the owning live tab supplies this
   client's machine alias, including for old fully qualified terminal values.
   A local `t8` is never used as a fallback for a missing remote `mini/t8`.
-  Missing/ambiguous owner context produces an explicit migration message.
-- **Existing chat bindings migrate on update.** The installer reads each core's
-  `herdr-app` document, backs up its versioned value, and patches only chat props
-  with local IDs and their owner context. Version conflicts trigger a fresh read;
-  terminals, splits, unrelated props and transcripts are preserved. Reachable
-  connected machines are migrated using their current aliases. Offline machines
-  may require rerunning the updater after reconnecting.
+  Missing/ambiguous owner context shows an explicit error instead of selecting
+  another machine. New chats save the owner context when they are created.
 - **More readable chat.** Base text is 15 px, tuned against the Alma reference. Image bounds:
   message/expanded tool images 420×300, collapsed tool thumbnails 312×215,
   attachment previews 144×108 logical pixels, preserving aspect ratio without upscaling.
@@ -87,7 +86,7 @@ files and review the diff before updating. Merge `keys.json`, run `herdr-app che
 on each mod, then `herdr-app do layout.switch '{"name":"chat"}'`.
 Do not copy your other Mac's `shared.json`, `view.json`, `data/`, `.state/` or window files.
 
-Regression checks: `node --test tests/*.test.mjs` (45 JavaScript tests; installer tests: `python3 -m unittest discover -s tests -p 'test_*.py'`).
+Regression checks: `node --test tests/*.test.mjs` (46 JavaScript tests; installer tests: `python3 -m unittest discover -s tests -p 'test_*.py'`).
 
 ---
 

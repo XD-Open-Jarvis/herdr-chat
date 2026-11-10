@@ -56,3 +56,17 @@ test('an explicit owner pane disambiguates multiple chat panes in the same tab',
 test('all three mods use identical machine-local identity helpers',()=>{
  for(const name of ['chat-tabs','chat-pane'])assert.equal(identity,readFileSync(new URL(`../mods/${name}/identity.js`,import.meta.url),'utf8'));
 });
+
+test('fresh Mini chat opens on a later MBP install with the same unchanged props',()=>{
+ const saved=chatProps('t8','tb-mini');
+ const json=JSON.stringify(saved);
+ const mini=chat(saved,[{pane:'p-chat',mod:'chat',tab:'tb-mini'}],[{address:'t8'}],'tb-mini');
+ assert.equal(mini.term,'t8');assert.equal(mini.chatVisible(),true);
+ const mbp=chat(JSON.parse(json),[
+  {pane:'mbp-chat',mod:'chat',tab:'tb-mbp'},
+  {pane:'mini/p-chat',mod:'chat',tab:'mini/tb-mini'},
+ ],[{address:'t8'},{address:'mini/t8'}],'mini/tb-mini');
+ assert.equal(mbp.myPane().pane,'mini/p-chat');
+ assert.equal(mbp.term,'mini/t8');assert.equal(mbp.terminal().address,'mini/t8');
+ assert.equal(mbp.chatVisible(),true);assert.equal(JSON.stringify(saved),json);
+});
