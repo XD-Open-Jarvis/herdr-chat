@@ -2,6 +2,15 @@
 // { kind: "user" | "assistant" | "tools" | "note", key, text, images, items }.
 // Images come out as { data (base64) | path, ext } for the view to cache.
 
+// hc delivers user text in an envelope. Unwrap only this transport tag;
+// keep filtering internal task/environment blocks as before.
+export function hcMessage(text) {
+  const match = /^\s*<hc(?:\s+([^>]*))?>([\s\S]*?)<\/hc>\s*$/.exec(text ?? "");
+  if (!match) return { text: text ?? "", from: null };
+  const from = /\bfrom\s*=\s*["']([^"']*)["']/.exec(match[1] ?? "")?.[1] ?? "hc";
+  return { text: match[2].trim(), from };
+}
+
 const MAX_RESULT = 6000;
 
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, "");
@@ -73,7 +82,8 @@ export class Transcript {
   note(text) { if (text) this.push({ kind: "note", text }); }
 
   user(text, images = []) {
-    text = (text ?? "").replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+    const incoming = hcMessage(text);
+    text = incoming.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
     // Slash commands and their output, as Claude Code records them.
     const cmd = /<command-name>([^<]*)<\/command-name>/.exec(text);
     if (cmd) {
@@ -99,7 +109,7 @@ export class Transcript {
     // Other tag-wrapped injections (task notifications, environment context).
     if (/^<([a-z_-]+)[^>]*>[\s\S]*<\/\1>$/.test(text)) return;
     if (!text && !images.length) return;
-    this.push({ kind: "user", text, images });
+    this.push({ kind: "user", text, images, ...(incoming.from ? { from: incoming.from } : {}) });
   }
 
   // The context card, in place of the terminal's drawing of the same numbers.
@@ -256,7 +266,7 @@ export class Transcript {
       for (const c of p.content ?? []) {
         if (c.type === "input_image") { const img = fromDataUrl(c.image_url); if (img) images.push(img); continue; }
         let t = (c.text ?? "").trim();
-        if (!t || /^<\/?image\b/.test(t) || /^<([a-z_-]+)[^>]*>[\s\S]*<\/\1>$/.test(t) || /^# AGENTS\.md/.test(t)) continue;
+        if (!t || /^<\/?image\b/.test(t) || (/^<([a-z_-]+)[^>]*>[\s\S]*<\/\1>$/.test(t) && !/^<hc(?:\s|>)/.test(t)) || /^# AGENTS\.md/.test(t)) continue;
         // The desktop app lists attachments, then "## My request:".
         const req = t.indexOf("## My request:");
         if (t.startsWith("# Files mentioned by the user:")) t = req >= 0 ? t.slice(req + 14).trim() : "";

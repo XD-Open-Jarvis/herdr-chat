@@ -1,6 +1,12 @@
 # Herdr Chat
 
-Fork additions: use a single 44 px conversation header supplied by `chat-pane`
+Fork additions: distinguish user input delivered through an `<hc from="…">`
+transport envelope from internal XML-wrapped messages. Unwrap the body and retain
+its sender in the transcript. Pause terminal scraping, log polling, session lookup
+and expensive UI construction whenever the chat is hidden by TUI zoom or another
+active tab; resume and catch up when it becomes visible again.
+
+Use a single 44 px conversation header supplied by `chat-pane`
 for both the chat and its linked agent terminal. Show workspace / session title,
 search in chat mode, agent status and a 对话 / 终端 segmented selector. The inner
 `chat.header()` only supplies the search field when open, not a second toolbar.

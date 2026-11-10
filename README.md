@@ -7,6 +7,14 @@ This fork packages the customized layout used on our Macs. Install the **`custom
 > Preserve existing layouts, mods and keybindings; ask before replacing conflicts.
 
 Changes from upstream:
+- **Hidden chats suspend background work.** While the TUI or another tab is
+  visible, Chat skips transcript UI construction, terminal screen scraping,
+  session lookup and log polling. Returning to Chat resumes log catch-up.
+  This removes avoidable work during terminal scrolling; it is not a claim
+  that every native terminal or agent-TUI scrolling issue is fixed.
+- **hc-delivered input appears in the transcript.** Transport envelopes such
+  as `<hc from="t1">hello</hc>` display as user messages with a small sender
+  label. Internal environment/task messages remain filtered.
 - **One Alma-style conversation header.** A 44 px bar shows workspace / session
   title on the left, and 对话 / 终端 on the right. The redundant `chat` title
   and inner agent toolbar are replaced by this single header. Search remains
@@ -40,7 +48,7 @@ files and review the diff before updating. Merge `keys.json`, run `herdr-app che
 on each mod, then `herdr-app do layout.switch '{"name":"chat"}'`.
 Do not copy your other Mac's `shared.json`, `view.json`, `data/`, `.state/` or window files.
 
-Regression checks: `node --test tests/*.test.mjs` (17 tests).
+Regression checks: `node --test tests/*.test.mjs` (30 tests).
 
 ---
 

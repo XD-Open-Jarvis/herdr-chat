@@ -238,6 +238,17 @@ export default class Chat extends View {
     return null;
   }
 
+  // Hidden copies stay alive in Herdr. Do not rebuild their transcript or
+  // scrape a terminal while its TUI (or another tab) is on screen.
+  chatVisible() {
+    if (this.dialog) return true;
+    const mine = this.myPane();
+    if (!mine) return false;
+    const active = spaces().find((space) => space.active)?.tabs?.find((tab) => tab.active);
+    if (active?.id !== mine.tab) return false;
+    return !panes().some((pane) => pane.tab === mine.tab && pane.zoomed && pane.pane !== mine.pane);
+  }
+
   // Whether the agent's terminal is out of sight: in a tab of its own, or behind the zoomed chat.
   termHidden(mine) {
     return away(this.terminal()) || (mine.zoomed && panes().some((p) => p.terminal === this.term && p.tab === mine.tab));
@@ -286,8 +297,9 @@ export default class Chat extends View {
   follow(kind, cx) {
     const loop = (this.streamLoop = {});
     cx.spawn(async (cx) => {
-      while (this.streamLoop === loop && this.terminal()?.status === "working") {
+      while (this.streamLoop === loop && this.terminal()?.status === "working" && this.chatVisible()) {
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
+        if (!this.chatVisible()) break;
         const now = r ? live(r.stdout, kind) : null;
         const text = now?.kind === "text" ? now.text : null;
         // Between steps the screen can show nothing new, or only text the chat
@@ -301,7 +313,7 @@ export default class Chat extends View {
       if (this.streamLoop === loop) this.streamLoop = null;
       this.stream = null;
       this.running = null;
-      cx.notify();
+      if (this.chatVisible()) cx.notify();
     });
   }
 
@@ -1114,6 +1126,7 @@ export default class Chat extends View {
     // Agents list) or the agent needing you brings it back; put it away again after.
     const own = away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
     if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
+    if (!this.chatVisible()) return;
     const kind = agentKind(term);
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
@@ -1193,6 +1206,7 @@ export default class Chat extends View {
     const dir = file.slice(0, file.lastIndexOf("/"));
     cx.spawn(async (cx) => {
       while (gen === this.gen) {
+        if (!this.chatVisible()) { await sleep(cx, 1000); continue; }
         try {
           const lines = await tail.read();
           if (gen !== this.gen) return;
@@ -1200,9 +1214,9 @@ export default class Chat extends View {
           if (lines.length) {
             for (const l of lines) this.t.feed(l);
             this.grew = true;
-            this.cacheShown(cx);
+            if (this.chatVisible()) this.cacheShown(cx);
             this.nameSpace();
-            cx.notify();
+            if (this.chatVisible()) cx.notify();
           }
           if (this.error) { this.error = null; cx.notify(); }
         } catch (e) {
@@ -1579,6 +1593,7 @@ export default class Chat extends View {
       // again) under the bubble, in a row that's always there.
       const on = this.hovered === e.key && Boolean(e.text);
       return v_flex().id(`row-${e.key}`).w_full().items_end().gap(4).on_hover(this.hover(e.key))
+        .when(Boolean(e.from), (el) => el.child(div().text_size(11).text_color(t.dim).child(`hc · ${e.from}`)))
         .child(v_flex().w(w).flex_none().gap(8).px(14).py(10).rounded(14).bg(t.raised)
           .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 280, 200)))))
           .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))))
@@ -2123,6 +2138,7 @@ export default class Chat extends View {
   }
 
   render() {
+    if (!this.dialog && !this.chatVisible()) return div().id("root").size_full();
     const t = theme();
     const term = this.term ? this.terminal() : null;
     if (!this.dialog && !this.term) {
