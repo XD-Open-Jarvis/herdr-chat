@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {runInNewContext} from 'node:vm';
+const identitySource=readFileSync(new URL('../mods/chat/identity.js',import.meta.url),'utf8');
+const {ownerPane,qualifyAddress,chatProps,machineOfTab}=await import('data:text/javascript;base64,'+Buffer.from(identitySource).toString('base64'));
+
 const source=readFileSync(new URL('../mods/chat/main.js',import.meta.url),'utf8')
   .replace(/^import[\s\S]*?;\n/gm,'').replace('export default class Chat','class Chat');
 function setup({active='work',zoomed='chat',dialog=false}={}) {
@@ -10,7 +13,7 @@ function setup({active='work',zoomed='chat',dialog=false}={}) {
   const all=[mine,{pane:'tui',terminal:'t1',tab:'work',zoomed:zoomed==='tui'}];
   const element={id(){return this;},size_full(){return this;}};
   const Chat=runInNewContext(source+'\nChat',{
-    View:class {},appWindow:()=>({platform:'macos'}),
+    View:class {},ownerPane,qualifyAddress,chatProps,appWindow:()=>({platform:'macos'}),
     spaces:()=>[{active:true,tabs:[{id:active,active:true}]}],panes:()=>all,
     shared:()=>({'chat':'t1'}),setShared:()=>{throw Error('unexpected shared write');},
     theme:()=>{calls.push('theme');throw Error('hidden render built UI');},div:()=>element,
@@ -19,7 +22,7 @@ function setup({active='work',zoomed='chat',dialog=false}={}) {
     away:()=>false,agentKind:()=>{calls.push('agent detection');},
   });
   const view=Object.create(Chat.prototype);
-  Object.assign(view,{dialog,term:'t1',myPane:()=>mine,stream:'old',running:{},catalogs:{}});
+  Object.assign(view,{dialog,terminalId:'t1',myPane:()=>mine,stream:'old',running:{},catalogs:{}});
   return {view,calls,element};
 }
 test('a zoomed TUI hides its chat',()=>assert.equal(setup({zoomed:'tui'}).view.chatVisible(),false));

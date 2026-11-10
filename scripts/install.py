@@ -53,6 +53,72 @@ def cli():
 def run(command, home, check=True):
     return subprocess.run(command, env={**os.environ, 'HERDR_APP_HOME': str(home)}, check=check)
 
+def migrate_document(value):
+    """Only normalize Chat props, never terminals, splits or other document fields."""
+    updated = json.loads(json.dumps(value))
+    count = 0
+    def local(value):
+        return value.rsplit('/', 1)[-1] if isinstance(value, str) else value
+    def walk(node, tab):
+        nonlocal count
+        content = node.get('content', {})
+        props = content.get('props')
+        if content.get('mod') == 'chat' and isinstance(props, dict) and props.get('terminal'):
+            normalized = {**props, 'terminal': local(props['terminal']),
+                          'owner_tab': local(tab), 'owner_pane': local(node['id'])}
+            if normalized != props:
+                content['props'] = normalized
+                count += 1
+        for child in node.get('children', []):
+            walk(child, tab)
+    for space in (updated or {}).get('spaces', []):
+        for tab in space.get('tabs', []):
+            walk(tab['root'], tab['id'])
+    return updated, count
+
+
+def core_rpc(binary, method, params):
+    request = {'jsonrpc':'2.0', 'id':1, 'method':method, 'params':params}
+    result = subprocess.run([binary, 'connect'], input=json.dumps(request)+'\n',
+                            text=True, capture_output=True, timeout=15, check=True)
+    for line in result.stdout.splitlines():
+        response = json.loads(line)
+        if response.get('id') != 1:
+            continue
+        if 'error' in response:
+            error = RuntimeError(str(response['error']))
+            error.conflict = response['error'].get('data', {}).get('kind') == 'conflict'
+            raise error
+        return response['result']
+    raise RuntimeError('No core reply for '+method)
+
+
+def migrate_chats(home, backup):
+    binary = shutil.which('hc') or str(Path.home()/'.local/bin/hc')
+    listing = subprocess.run([binary, 'machine', 'ls', '--json'], text=True,
+                             capture_output=True, timeout=15, check=True)
+    machines = [None] + [m['name'] for m in json.loads(listing.stdout).get('machines', [])
+                          if not m.get('temporary')]
+    for index, machine in enumerate(machines):
+        params = {'name':'herdr-app', **({'on':machine} if machine else {})}
+        for attempt in range(3):
+            saved = core_rpc(binary, 'doc.get', params)
+            updated, count = migrate_document(saved['value'])
+            if not count:
+                break
+            # Keep the exact source document before a version-checked write.
+            path = backup/('herdr-app-doc-'+str(index)+'-v'+str(saved['version'])+'.json')
+            path.write_text(json.dumps(saved, indent=2, ensure_ascii=False)+'\n')
+            try:
+                core_rpc(binary, 'doc.set', {**params, 'version':saved['version'], 'value':updated})
+                print('Migrated', count, 'Chat pane bindings on', machine or 'this machine')
+                break
+            except RuntimeError as error:
+                if not getattr(error, 'conflict', False) or attempt == 2:
+                    raise
+                # Re-read and reapply only the props patch; never overwrite a newer layout.
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--home', type=Path, default=Path(os.environ.get('HERDR_APP_HOME', str(Path.home()/'.config/herdr-app'))))
@@ -102,13 +168,14 @@ def main():
             shutil.copy2(keyfile, backup/'keys.json')
         global_keys[key] = 'mod.open:chat'
         keyfile.write_text(json.dumps(keys, indent=2, ensure_ascii=False)+'\n')
+    migrate_chats(home, backup)
     for name in MODS:
         run([binary, 'check', str(home/'mods'/name)], home)
     run([binary, 'do', 'layout.switch', json.dumps({'name':'chat'})], home)
     run([binary, 'status'], home)
     print('Backup:', backup)
     print('Updated. Supported Claude/Codex terminals now show 对话 / 终端, even before a chat exists.')
-    print('No session data, settings, or other layouts were copied.')
+    print('Only Chat binding props were migrated; transcripts, terminal structure, settings and other layouts were preserved.')
     return 0
 
 if __name__ == '__main__':

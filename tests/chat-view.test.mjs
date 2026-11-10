@@ -3,6 +3,9 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {runInNewContext} from 'node:vm';
 
+const identitySource=readFileSync(new URL('../mods/chat/identity.js',import.meta.url),'utf8');
+const {ownerPane,qualifyAddress,chatProps,machineOfTab}=await import('data:text/javascript;base64,'+Buffer.from(identitySource).toString('base64'));
+
 const source = readFileSync(new URL('../mods/chat/backstage.js', import.meta.url), 'utf8');
 const switching = source.slice(source.indexOf('export async function switchView'))
   .replace('export async function', 'async function');
@@ -60,7 +63,7 @@ function headerSetup({linked=false,chat=true}={}) {
   const conversation={pane:'chat',mod:'chat',tab:tui.tab};
   const calls=[];
   const Pane=runInNewContext(headerSource+'\nPane',{
-    View:class {},shared:()=>linked?{chat:terminal.address}:{},
+    View:class {},qualifyAddress,chatProps,machineOfTab,shared:()=>linked?{chat:terminal.address}:{},
     terminals:()=>[terminal],panes:()=>chat?[tui,conversation]:[tui],
     herdr:async(command,args)=>{calls.push([command,args]);return {pane:'new-chat'};},
     switchView:async(...args)=>{calls.push(['switchView',...args]);},
@@ -79,7 +82,7 @@ test('first Chat selection creates a chat and then selects it in place',async()=
   const s=headerSetup({chat:false});let task;
   const cx={spawn(fn){task=fn(this);},notify(){}};
   s.view.selectView(s.view.chatPair(s.tui),'chat',cx);await task;
-  assert.equal(s.calls[0][0],'pane.split');assert.equal(s.calls[0][1].props.terminal,'remote/t1');
+  assert.equal(s.calls[0][0],'pane.split');assert.equal(s.calls[0][1].props.terminal,'t1');
   assert.equal(s.calls[1][0],'switchView');assert.equal(s.calls[1][1],'new-chat');
   assert.equal(s.calls[1][3],'chat');
 });

@@ -14,6 +14,7 @@ import * as fs from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { Transcript } from "./parse.js";
+import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, PICKER, emojiMatches } from "./emoji.js";
@@ -50,7 +51,9 @@ out=$("$H" do space.new "$1") || { echo "$out" >&2; exit 1; }
 term=$(printf '%s\n' "$out" | sed -n 's/.*"terminal": *"\\([^"]*\\)".*/\\1/p')
 [ -n "$term" ] || { echo "$out" >&2; exit 1; }
 "$H" do pane.focus "{\\"terminal\\":\\"$term\\"}" >/dev/null
-props=$(printf '%s' "$2" | sed "s|__TERM__|$term|")
+tab=$(printf '%s\n' "$out" | sed -n 's/.*"tab": *"\\([^" ]*\\)".*/\\1/p')
+[ -n "$tab" ] || { echo "No tab returned for the new chat" >&2; exit 1; }
+props=$(printf '%s' "$2" | sed "s|__TERM__|\${term##*/}|;s|__TAB__|\${tab##*/}|")
 split=$("$H" do pane.split "{\\"direction\\":\\"right\\",\\"mod\\":\\"chat\\",\\"props\\":$props}") || { echo "$split" >&2; exit 1; }
 pane=$(printf '%s\n' "$split" | sed -n 's/.*"pane": *"\\([^"]*\\)".*/\\1/p')
 [ -n "$pane" ] && "$H" do pane.zoom "{\\"pane\\":\\"$pane\\"}" >/dev/null
@@ -129,7 +132,8 @@ export default class Chat extends View {
     // The agent comes in props; localStorage is shared by copies with equal props.
     const p = props() ?? {};
     this.dialog = Boolean(p.overlay);
-    this.term = this.dialog ? null : p.terminal ?? null;
+    this.terminalId = this.dialog ? null : localId(p.terminal);
+    this.owner = { owner_tab: p.owner_tab, owner_pane: p.owner_pane };
     this.started = Boolean(p.started);
     // What the New chat form launched with; Claude doesn't log its effort.
     if (p.model || p.effort) this.chosen = { model: p.model, effort: p.effort, logged: null };
@@ -218,24 +222,21 @@ export default class Chat extends View {
     this.check(cx);
   }
 
+  get term() {
+    return qualifyAddress(this.terminalId, this.myPane()?.tab);
+  }
+
   terminal() {
-    return terminals().find((x) => x.address === this.term) ?? null;
+    const address = this.term;
+    return address ? terminals().find((x) => x.address === address) ?? null : null;
   }
 
-  // The agent's tab and space, from the labels Herdr gives its terminal.
   label(name) {
-    const id = this.terminal()?.labels?.[`herdr.${name}`];
-    const m = machineOf(this.term);
-    return id ? (m ? `${m}/${id}` : id) : null;
+    return qualifyAddress(this.terminal()?.labels?.[`herdr.${name}`], this.myPane()?.tab);
   }
 
-  // This chat's pane: in the agent's tab, or the tab the agent stepped out of.
   myPane() {
-    for (const tab of [this.label("tab"), chatTab(this.terminal())]) {
-      const mine = tab && panes().find((p) => p.mod === "chat" && p.tab === tab);
-      if (mine) return mine;
-    }
-    return null;
+    return ownerPane(this.owner ?? {}, panes());
   }
 
   // Hidden copies stay alive in Herdr. Do not rebuild their transcript or
@@ -1088,7 +1089,7 @@ export default class Chat extends View {
   }
 
   setTerm(address, cx) {
-    this.term = address;
+    this.terminalId = localId(address);
     this.sig = null;
     this.file = null;
     this.t = null;
@@ -1117,9 +1118,9 @@ export default class Chat extends View {
     if (mine) {
       this.pane = mine.pane;
       const links = shared("chat.panes") ?? {};
-      if (links[mine.pane] !== this.term) {
+      if (links[mine.pane] !== this.terminalId) {
         const live = new Set(panes().filter((p) => p.mod === "chat").map((p) => p.pane));
-        setShared("chat.panes", { ...Object.fromEntries(Object.entries(links).filter(([id]) => live.has(id))), [mine.pane]: this.term });
+        setShared("chat.panes", { ...Object.fromEntries(Object.entries(links).filter(([id]) => live.has(id))), [mine.pane]: this.terminalId });
       }
     }
     // The agent's own tab, while it's away from the chat: showing it (from the
@@ -1127,10 +1128,20 @@ export default class Chat extends View {
     const own = away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
     if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
     if (!this.chatVisible()) return;
+    if (this.sourceAddress !== this.term) {
+      this.sourceAddress = this.term;
+      this.gen++;
+      this.file = null;
+      this.t = null;
+      this.sig = null;
+      this.streamLoop = null;
+      this.stream = null;
+      this.running = null;
+    }
     const kind = agentKind(term);
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
-    const sig = term && kind ? `${kind}:${term.foreground?.pid}` : null;
+    const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
     this.ticks++;
     if (sig && !this.locating && (sig !== this.sig || this.ticks % 3 === 0 || !this.file)) {
       this.locating = true;
@@ -1428,7 +1439,7 @@ export default class Chat extends View {
         setShared("chat.recent", [{ folder, machine }, ...recent].slice(0, 6));
         setShared("chat.kind", kind);
         const spec = { folder, machine: machine ?? "", argv: launchArgv(kind, model, effort), ...(task ? { task } : {}) };
-        const chatProps = { terminal: "__TERM__", started: true, model, effort };
+        const chatProps = { terminal: "__TERM__", owner_tab: "__TAB__", started: true, model, effort };
         const r = await exec("sh", ["-c", NEW_SPACE, "sh", JSON.stringify(spec), JSON.stringify(chatProps)]);
         if (r.code !== 0) throw new Error(r.stderr.trim() || "Couldn't start the chat");
         closeOverlay(props().overlay);
@@ -1451,10 +1462,11 @@ export default class Chat extends View {
   openBeside(address, cx) {
     cx.spawn(async (cx) => {
       try {
-        const pane = panes().find((p) => p.terminal === address)?.pane;
+        const target = panes().find((p) => p.terminal === address);
+        const pane = target?.pane;
         if (!pane) throw new Error("That agent has no pane to open beside");
         run("pane.focus", { pane });
-        await herdr("pane.split", { direction: "right", pane, mod: "chat", props: { terminal: address } });
+        await herdr("pane.split", { direction: "right", pane, mod: "chat", props: chatProps(address, target.tab) });
         closeOverlay(props().overlay);
       } catch (e) {
         this.error = String(e?.message ?? e);
@@ -2138,6 +2150,8 @@ export default class Chat extends View {
   }
 
   render() {
+    if (!this.dialog && !this.myPane()) return v_flex().id("root").size_full().p(20)
+      .child("Chat owner context is missing or ambiguous. Run scripts/install.py --update to migrate this pane; no terminal has been selected.");
     if (!this.dialog && !this.chatVisible()) return div().id("root").size_full();
     const t = theme();
     const term = this.term ? this.terminal() : null;

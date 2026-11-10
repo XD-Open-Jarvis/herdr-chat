@@ -1,3 +1,4 @@
+import { chatProps, qualifyAddress, machineOfTab } from "./identity.js";
 // A pane's header, for layouts that frame their panes:
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "chat-pane" } } } }
 // Shows the program's icon (the app's program table), the agent's name or
@@ -51,13 +52,13 @@ export default class Pane extends View {
 
   // A chat pane's agent: its terminal's pane in the tab, or the terminal it hid away.
   agentOf(chat) {
-    const address = (shared("chat.panes") ?? {})[chat.pane];
+    const address = qualifyAddress((shared("chat.panes") ?? {})[chat.pane], chat.tab);
     const linked = address && terminals().find((term) => term.address === address);
     if (linked) return { terminal: address, pane: panes().find((p) => p.terminal === address)?.pane };
-    const here = panes().find((x) => x.tab === chat.tab && x.terminal && (x.program?.agent || x.status));
-    if (here) return here;
+    const candidates = panes().filter((x) => x.tab === chat.tab && x.terminal && (x.program?.agent || x.status));
+    if (candidates.length === 1) return candidates[0];
     const tab = chat.tab.split("/").pop();
-    const term = terminals().find((x) => x.state === "live" && x.labels?.["chat.tab"] === tab && away(x));
+    const term = terminals().find((x) => x.state === "live" && x.labels?.["chat.tab"] === tab && machineOfTab(x.address) === machineOfTab(chat.tab) && away(x));
     return term ? { terminal: term.address, pane: panes().find((x) => x.terminal === term.address)?.pane } : null;
   }
 
@@ -133,14 +134,14 @@ export default class Pane extends View {
     const links = shared("chat.panes") ?? {};
     const all = panes();
     if (p.mod === "chat") {
-      const address = links[p.pane] ?? this.agentOf(p)?.terminal;
+      const address = qualifyAddress(links[p.pane], p.tab) ?? this.agentOf(p)?.terminal;
       const term = terminals().find((x) => x.address === address);
       return term ? { chat: p, term } : null;
     }
     const term = terminals().find((x) => x.address === p.terminal);
     const kind = `${p.app ?? ""} ${term?.report?.app ?? ""} ${term?.foreground?.name ?? ""} ${term?.program?.key ?? ""} ${term?.argv?.[0] ?? ""}`.toLowerCase();
     if (!term || !/claude|codex/.test(kind)) return null;
-    const linked = all.find((x) => x.mod === "chat" && links[x.pane] === p.terminal);
+    const linked = all.find((x) => x.mod === "chat" && qualifyAddress(links[x.pane], x.tab) === p.terminal);
     // A newly installed window may not have populated the shared map yet.
     const sameTab = all.filter((x) => x.mod === "chat" && x.tab === p.tab);
     const chat = linked ?? (sameTab.length === 1 ? sameTab[0] : null);
@@ -155,7 +156,7 @@ export default class Pane extends View {
         let chat = pair.chat;
         if (!chat) {
           const created = await herdr("pane.split", { direction: "right", pane: pair.terminalPane,
-            mod: "chat", props: { terminal: pair.term.address } });
+            mod: "chat", props: chatProps(pair.term.address, pair.tab) });
           chat = { pane: created.pane };
         }
         await switchView(chat.pane, pair.term, mode);

@@ -16,7 +16,7 @@ class InstallTests(unittest.TestCase):
     def invoke(self, home, *flags):
         with patch.object(sys, 'argv', ['install.py', '--home', str(home), *flags]), \
              patch.object(install, 'cli', return_value='/fake/herdr-app'), \
-             patch.object(install, 'run'), contextlib.redirect_stdout(io.StringIO()):
+             patch.object(install, 'run'), patch.object(install, 'migrate_chats'), contextlib.redirect_stdout(io.StringIO()):
             return install.main()
 
     def test_dry_run_does_not_write(self):
@@ -61,6 +61,45 @@ class InstallTests(unittest.TestCase):
                 for child in node.get('children',[]):change(child)
             change(layout);p.write_text(json.dumps(layout))
             self.assertEqual(self.invoke(home,'--diagnose'),1)
+
+
+class MigrationTests(unittest.TestCase):
+    def test_only_chat_binding_props_change_and_migration_is_idempotent(self):
+        old={'spaces':[{'id':'s1','tabs':[{'id':'tb1','root':{'id':'root','children':[
+            {'id':'p-chat','content':{'mod':'chat','props':{'terminal':'old-alias/t8','model':'keep'}}},
+            {'id':'p-shell','content':{'terminal':'t8'}},
+            {'id':'p-file','content':{'mod':'files','props':{'terminal':'anything'}}}
+        ]}}]}], 'future': {'keep':True}}
+        original=json.loads(json.dumps(old))
+        updated,count=install.migrate_document(old)
+        self.assertEqual(count,1)
+        self.assertEqual(old,original)
+        children=updated['spaces'][0]['tabs'][0]['root']['children']
+        self.assertEqual(children[0]['content']['props'],{'terminal':'t8','owner_tab':'tb1','owner_pane':'p-chat','model':'keep'})
+        self.assertEqual(children[1:],old['spaces'][0]['tabs'][0]['root']['children'][1:])
+        self.assertEqual(updated['future'],old['future'])
+        self.assertEqual(install.migrate_document(updated),(updated,0))
+
+    def test_conflicts_reread_new_layout_before_retrying(self):
+        from types import SimpleNamespace
+        old={'spaces':[{'tabs':[{'id':'tb1','root':{'id':'p1','content':{'mod':'chat','props':{'terminal':'mini/t8'}}}}]}]}
+        reads=[{'value':old,'version':1},{'value':{**old,'concurrent':'keep'},'version':2}]
+        writes=[]
+        def rpc(binary, method, params):
+            if method=='doc.get':return reads.pop(0)
+            writes.append(params)
+            if len(writes)==1:
+                error=RuntimeError('conflict');error.conflict=True;raise error
+            return {'version':3}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(install,'core_rpc',side_effect=rpc), \
+             patch.object(install.subprocess,'run',return_value=SimpleNamespace(stdout='{"machines":[]}')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            install.migrate_chats(Path(tmp),Path(tmp))
+            self.assertEqual(writes[0]['version'],1)
+            self.assertEqual(writes[1]['version'],2)
+            self.assertEqual(writes[1]['value']['concurrent'],'keep')
+            self.assertEqual(len(list(Path(tmp).glob('herdr-app-doc-*.json'))),2)
 
 if __name__ == '__main__':
     unittest.main()

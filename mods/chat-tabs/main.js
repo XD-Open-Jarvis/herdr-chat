@@ -1,3 +1,4 @@
+import { chatProps } from "./identity.js";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, terminals, run, exec, home, notify, openOverlay, theme, window, shared, layout, settings } from "herdr";
@@ -90,7 +91,7 @@ export default class Tabs extends View {
   openChat(tab, cx) {
     const { chat, agent } = this.chatIn(tab);
     if (chat || !agent) return;
-    run("pane.split", { direction: "right", pane: agent.pane, mod: "chat", props: { terminal: agent.terminal } });
+    run("pane.split", { direction: "right", pane: agent.pane, mod: "chat", props: chatProps(agent.terminal, tab.id) });
     // run() gives no pane id: zoom the chat once it's in the tab.
     cx.spawn(async () => {
       for (let i = 0; i < 20; i++) {
