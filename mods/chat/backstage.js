@@ -7,7 +7,7 @@
 // chat's tab while it's away. The chat and its pane header each keep a copy
 // of this file (a mod can't import another's): change both together.
 
-import { exec, hc } from "herdr";
+import { exec, hc, panes } from "herdr";
 
 // An app command through the CLI, awaited: run() from a mod returns nothing
 // and doesn't keep calls in order.
@@ -70,4 +70,22 @@ export async function show(term) {
   if (!tab) return;
   await moveTo(term.address, term.labels["herdr.space"], tab);
   await hc(["label", term.address, "chat.tab="]);
+}
+
+// Switch the existing pair in place. Never split, swap, park or kill on a
+// view toggle. Restore terminals parked by older versions before selecting.
+export async function switchView(chatPane, terminal, mode) {
+  let chat = panes().find((p) => p.pane === chatPane && p.mod === "chat");
+  if (!chat) throw new Error("This chat pane is no longer available");
+  if (mode === "terminal" && away(terminal)) await show(terminal);
+  let target;
+  for (let i = 0; i < 30; i++) {
+    target = mode === "chat" ? panes().find((p) => p.pane === chatPane)
+      : panes().find((p) => p.terminal === terminal.address && p.tab === chat.tab);
+    if (target) break;
+    await pause(0.1);
+  }
+  if (!target) throw new Error("The agent terminal is no longer available");
+  if (!target.zoomed) await herdr("pane.zoom", { pane: target.pane });
+  await herdr("pane.focus", { pane: target.pane });
 }

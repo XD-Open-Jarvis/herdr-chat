@@ -106,7 +106,7 @@
                       "mod": "chat-pane"
                     },
                     "reveal": "always",
-                    "height": 30,
+                    "height": 44,
                     "position": "top"
                   },
                   "background": "background",

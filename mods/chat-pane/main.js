@@ -11,8 +11,8 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { panes, props, run, theme, home, terminals, openOverlay, closeOverlay } from "herdr";
-import { herdr, away, hide, show } from "./backstage.js";
+import { panes, props, run, theme, home, terminals, openOverlay, closeOverlay, spaces, shared, notify } from "herdr";
+import { herdr, away, hide, show, switchView } from "./backstage.js";
 
 
 function icon(p, size, color) {
@@ -51,6 +51,9 @@ export default class Pane extends View {
 
   // A chat pane's agent: its terminal's pane in the tab, or the terminal it hid away.
   agentOf(chat) {
+    const address = (shared("chat.panes") ?? {})[chat.pane];
+    const linked = address && terminals().find((term) => term.address === address);
+    if (linked) return { terminal: address, pane: panes().find((p) => p.terminal === address)?.pane };
     const here = panes().find((x) => x.tab === chat.tab && x.terminal && (x.program?.agent || x.status));
     if (here) return here;
     const tab = chat.tab.split("/").pop();
@@ -95,6 +98,8 @@ export default class Pane extends View {
     if (props()?.overlay) return this.question(t);
     const p = this.me();
     if (!p) return div();
+    const pair = this.chatPair(p);
+    if (pair) return this.conversationHeader(p, pair, t);
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
@@ -122,6 +127,59 @@ export default class Pane extends View {
         .child(this.splitButton(t, p, "down"))
         .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
         .child(this.closeButton(t, p)));
+  }
+
+  chatPair(p) {
+    const links = shared("chat.panes") ?? {};
+    const all = panes();
+    const chat = p.mod === "chat" ? p : all.find((x) => x.mod === "chat" && links[x.pane] === p.terminal);
+    if (!chat) return null;
+    const agent = p.mod === "chat" ? this.agentOf(chat) : p;
+    const address = links[chat.pane] ?? agent?.terminal;
+    const term = terminals().find((x) => x.address === address);
+    return term ? { chat, term } : null;
+  }
+
+  selectView(pair, mode, cx) {
+    if (this.switching) return;
+    this.switching = true;
+    cx.spawn(async (cx) => {
+      try { await switchView(pair.chat.pane, pair.term, mode); }
+      catch (e) { notify({ title: "Couldn't switch view", body: String(e?.message ?? e), level: "error" }); }
+      this.switching = false;
+      cx.notify();
+    });
+  }
+
+  conversationHeader(p, pair, t) {
+    const space = spaces().find((s) => s.tabs?.some((tab) => tab.id === pair.chat.tab));
+    const title = pair.term.title || pair.term.name || pair.term.report?.app || "Chat";
+    const chatMode = p.mod === "chat";
+    const segment = (mode, label) => div().id(`view-${mode}-${p.pane}`).px(12).h(28).rounded(7)
+      .flex().items_center().justify_center().cursor_pointer().text_size(12.5).font_medium()
+      .bg((mode === "chat") === chatMode ? t.raised : t.chrome)
+      .text_color((mode === "chat") === chatMode ? t.foreground : t.muted)
+      .hover((s) => s.text_color(t.foreground))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); this.selectView(pair, mode, cx); }).child(label);
+    return h_flex().id(`conversation-header-${p.pane}`).size_full().px(14).gap(10).items_center()
+      .bg(t.background).text_size(13)
+      .on_hover((on, cx) => { this.hovered = on; cx.notify(); })
+      .on_click(() => run("pane.focus", { pane: p.pane }))
+      .child(div().flex_none().max_w(150).truncate().text_color(t.muted).child(space?.name ?? "herdr"))
+      .child(div().flex_none().text_color(t.dim).child("/"))
+      .child(div().flex_1().min_w(0).truncate().font_semibold().text_color(t.foreground).child(title))
+      .when(pair.term.status === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900)))
+      .when(pair.term.status === "blocked", (el) => el.child(div().text_size(11).text_color(t.blocked).child("Needs you")))
+      .when(chatMode, (el) => el.child(div().id(`chat-search-${p.pane}`).size(26).flex_none()
+        .flex().items_center().justify_center().rounded(6).cursor_pointer().text_color(t.muted)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Search conversation")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); run("chat.search"); })
+        .child(svg("mods/chat/icons/search.svg").size(14))))
+      .when(this.hovered, (el) => el.child(this.closeButton(t, p)))
+      .child(h_flex().flex_none().p(3).gap(2).rounded(9).bg(t.chrome)
+        .child(segment("chat", "对话")).child(segment("terminal", "终端")));
   }
 
   splitButton(t, p, direction) {

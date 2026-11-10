@@ -1,6 +1,18 @@
 # Herdr Chat
 
-Fork additions: keep the normal frame and header for a lone or zoomed pane;
+Fork additions: use a single 44 px conversation header supplied by `chat-pane`
+for both the chat and its linked agent terminal. Show workspace / session title,
+search in chat mode, agent status and a 对话 / 终端 segmented selector. The inner
+`chat.header()` only supplies the search field when open, not a second toolbar.
+`chat` publishes its pane-to-terminal association under shared `chat.panes`.
+`switchView()` in both copies of `backstage.js` selects the existing target pane
+with `pane.zoom` followed by `pane.focus`; clicking the selected view must not
+unzoom it. Do not split, swap, park, start or kill a terminal on a view toggle.
+For older parked terminals only, use the existing restore path first. Preserve
+other split panes in the underlying tab. The shared pane frame header is required:
+custom layouts using these mods should set their header mod to `chat-pane` at 44 px.
+
+Keep the normal frame and header for a lone or zoomed pane;
 only use the accent focus border with multiple visible panes. `chat-tabs` updates
 `content.pane.focus` through `layout.set` as the active tab/zoom state changes.
 A `chat.tab` label is valid only when its machine-qualified destination contains

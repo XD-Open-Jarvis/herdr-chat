@@ -7,6 +7,15 @@ This fork packages the customized layout used on our Macs. Install the **`custom
 > Preserve existing layouts, mods and keybindings; ask before replacing conflicts.
 
 Changes from upstream:
+- **One Alma-style conversation header.** A 44 px bar shows workspace / session
+  title on the left, and 对话 / 终端 on the right. The redundant `chat` title
+  and inner agent toolbar are replaced by this single header. Search remains
+  available in chat mode and with the existing keyboard shortcut.
+- **Chat / TUI switches in place.** The control selects and zooms the existing
+  chat or agent pane in the same tab, without opening a new split or swapping
+  panes. Repeated clicks keep the current view. Terminals parked by older
+  versions are restored before switching. Other split panes are preserved in
+  the tab and reappear when zoom is cancelled. Both modes keep the selector.
 - **Move to chat recovers after closing a chat in another layout.** A stale
   `chat.tab` label no longer suppresses the button. Existing hidden chats still
   offer Back to chat, including on remote machines.
@@ -31,7 +40,7 @@ files and review the diff before updating. Merge `keys.json`, run `herdr-app che
 on each mod, then `herdr-app do layout.switch '{"name":"chat"}'`.
 Do not copy your other Mac's `shared.json`, `view.json`, `data/`, `.state/` or window files.
 
-Regression checks: `node --test tests/chat-tabs.test.mjs`.
+Regression checks: `node --test tests/*.test.mjs` (17 tests).
 
 ---
 

@@ -22,7 +22,7 @@ import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, openFile, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
-import { herdr, chatTab, away, hide, show } from "./backstage.js";
+import { herdr, chatTab, away, hide, show, switchView } from "./backstage.js";
 
 const ASK_FIRST = "Answer the question above first.";
 
@@ -209,6 +209,7 @@ export default class Chat extends View {
       for (;;) {
         const c = await nextCommand();
         if (c === "focus") this.input.focus();
+        if (c === "search") this.openSearch(cx);
         cx.notify();
       }
     });
@@ -1101,7 +1102,14 @@ export default class Chat extends View {
   check(cx) {
     const term = this.terminal();
     const mine = this.myPane();
-    if (mine) this.pane = mine.pane;
+    if (mine) {
+      this.pane = mine.pane;
+      const links = shared("chat.panes") ?? {};
+      if (links[mine.pane] !== this.term) {
+        const live = new Set(panes().filter((p) => p.mod === "chat").map((p) => p.pane));
+        setShared("chat.panes", { ...Object.fromEntries(Object.entries(links).filter(([id]) => live.has(id))), [mine.pane]: this.term });
+      }
+    }
     // The agent's own tab, while it's away from the chat: showing it (from the
     // Agents list) or the agent needing you brings it back; put it away again after.
     const own = away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
@@ -1484,53 +1492,14 @@ export default class Chat extends View {
     return this.catalogs[`${kind}@${machine ?? ""}`] ?? null;
   }
 
-  // Shows the agent's terminal to the right of the chat, or hides it again.
-  toggleTerminal(cx) {
-    const mine = this.myPane();
-    if (mine && !this.termHidden(mine)) return this.hideTerminal(mine, cx);
-    this.showTerminal(cx);
-  }
-
-  // Hiding moves only the agent's terminal away (see backstage.js): other
-  // terminals split beside the chat stay.
-  hideTerminal(mine, cx) {
-    if (this.moving) return;
-    this.moving = true;
-    cx.spawn(async (cx) => {
-      try { await hide(this.terminal(), mine.tab); } catch (e) { this.error = `Couldn't hide the terminal: ${e?.message ?? e}`; }
-      this.moving = false;
-      cx.notify();
-    });
-  }
-
+  // Show the existing terminal in the conversation's area, never beside it.
   showTerminal(cx) {
     const mine = this.myPane();
-    if (!mine) {
-      if (this.terminal()?.state === "live") run("terminal.peek", { terminal: this.term });
-      return;
-    }
-    if (!this.termHidden(mine)) {
-      const tp = panes().find((p) => p.terminal === this.term);
-      return tp && run("pane.focus", { pane: tp.pane });
-    }
-    if (this.moving) return;
+    if (!mine || this.moving) return;
     this.moving = true;
-    // One after another through the CLI: a swap sent before the zoom lands
-    // does nothing. The swap is a no-op when the terminal is already right.
     cx.spawn(async (cx) => {
-      try {
-        if (mine.zoomed) await herdr("pane.zoom", { pane: mine.pane });
-        if (away(this.terminal())) await show(this.terminal());
-        let tp = null;
-        for (let i = 0; i < 30 && !tp; i++) {
-          tp = panes().find((p) => p.terminal === this.term && p.tab === mine.tab);
-          if (!tp) await exec("sh", ["-c", "sleep 0.1"]);
-        }
-        if (tp) {
-          await herdr("pane.focus", { pane: tp.pane });
-          await herdr("pane.swap", { direction: "right" }).catch(() => {});
-        }
-      } catch (e) { this.error = `Couldn't show the terminal: ${e?.message ?? e}`; }
+      try { await switchView(mine.pane, this.terminal(), "terminal"); }
+      catch (e) { this.error = `Couldn't switch to terminal: ${e?.message ?? e}`; }
       this.moving = false;
       cx.notify();
     });
@@ -1847,21 +1816,7 @@ export default class Chat extends View {
   }
 
   header(term, t) {
-    const { kind } = this.current();
-    const mine = this.myPane();
-    const termLabel = mine ? (this.termHidden(mine) ? "Show terminal" : "Hide terminal") : "Terminal";
-    const btn = (id, text, action) => div().id(id).flex_none().px(8).py(3).rounded(6).cursor_pointer().text_color(t.muted)
-      .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
-    return v_flex().flex_none().border_b(1).border_color(t.border).bg(t.chrome)
-      .child(h_flex().h(32).px(12).gap(8).items_center().text_size(12)
-        .child(div().flex_none().font_semibold().child(AGENTS[kind] ?? "Terminal"))
-        .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child([this.t?.title, this.term].filter(Boolean).join(" · ")))
-        .child(div().id("search").flex_none().size(24).flex().items_center().justify_center().rounded(6).cursor_pointer()
-          .text_color(this.searching ? t.foreground : t.muted).when(Boolean(this.searching), (el) => el.bg(t.hover))
-          .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(`Search (${shortcut("F")})`)
-          .on_click((_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
-          .child(svg("mods/chat/icons/search.svg").size(14)))
-        .child(btn("go-term", termLabel, (_e, cx) => this.toggleTerminal(cx))))
+    return v_flex().flex_none()
       .when(Boolean(this.searching) && (this.shown(), true), (el) => el.child(h_flex().id("search-bar").key_context("ChatSearch")
         .on_action("chat_search_close", (_e, cx) => this.closeSearch(cx))
         .h(38).px(12).gap(8).items_center().border_t(1).border_color(t.border).bg(t.background)
