@@ -1,4 +1,5 @@
-import { chatProps } from "./identity.js";
+import { openChat as openConversation } from "./owner.js";
+import { switchView } from "./backstage.js";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, terminals, run, exec, home, notify, openOverlay, theme, window, shared, layout, settings } from "herdr";
@@ -89,17 +90,17 @@ export default class Tabs extends View {
   }
 
   openChat(tab, cx) {
-    const { chat, agent } = this.chatIn(tab);
-    if (chat || !agent) return;
-    run("pane.split", { direction: "right", pane: agent.pane, mod: "chat", props: chatProps(agent.terminal, tab.id) });
-    // run() gives no pane id: zoom the chat once it's in the tab.
-    cx.spawn(async () => {
-      for (let i = 0; i < 20; i++) {
-        await exec("sh", ["-c", "sleep 0.1"]);
-        const { chat } = this.chatIn(tab);
-        if (chat) return run("pane.zoom", { pane: chat.pane });
-      }
-      notify({ title: "Couldn't open the chat", body: "The chat pane didn't appear", level: "error" });
+    const { agent } = this.chatIn(tab);
+    if (!agent || this.openingChat) return;
+    this.openingChat = true;
+    cx.spawn(async (cx) => {
+      try {
+        const created = await openConversation({ pane: agent.pane, tab: tab.id, terminal: agent.terminal });
+        const terminal = terminals().find((t) => t.address === agent.terminal);
+        await switchView(created.pane, terminal, "chat");
+      } catch (error) { notify({ title: "Couldn't open the chat", body: String(error?.message ?? error), level: "error" }); }
+      this.openingChat = false;
+      cx.notify();
     });
   }
 

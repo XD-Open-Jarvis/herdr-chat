@@ -1,4 +1,5 @@
-import { chatProps, qualifyAddress, machineOfTab } from "./identity.js";
+import { openChat as openConversation, bindOwner } from "./owner.js";
+import { qualifyAddress, machineOfTab } from "./identity.js";
 // A pane's header, for layouts that frame their panes:
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "chat-pane" } } } }
 // Shows the program's icon (the app's program table), the agent's name or
@@ -143,8 +144,7 @@ export default class Pane extends View {
     if (!term || !/claude|codex/.test(kind)) return null;
     const linked = all.find((x) => x.mod === "chat" && qualifyAddress(links[x.pane], x.tab) === p.terminal);
     // A newly installed window may not have populated the shared map yet.
-    const sameTab = all.filter((x) => x.mod === "chat" && x.tab === p.tab);
-    const chat = linked ?? (sameTab.length === 1 ? sameTab[0] : null);
+    const chat = linked ?? null;
     return { chat, term, terminalPane: p.pane, tab: p.tab };
   }
 
@@ -154,10 +154,10 @@ export default class Pane extends View {
     cx.spawn(async (cx) => {
       try {
         let chat = pair.chat;
-        if (!chat) {
-          const created = await herdr("pane.split", { direction: "right", pane: pair.terminalPane,
-            mod: "chat", props: chatProps(pair.term.address, pair.tab) });
-          chat = { pane: created.pane };
+        if (mode === "chat" && pair.terminalPane) {
+          chat = await openConversation({ pane: pair.terminalPane, tab: pair.tab, terminal: pair.term.address });
+        } else if (chat) {
+          await bindOwner(chat.pane, chat.tab, pair.term.address);
         }
         await switchView(chat.pane, pair.term, mode);
       }

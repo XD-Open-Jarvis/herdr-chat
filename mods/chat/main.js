@@ -15,6 +15,7 @@ import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { Transcript } from "./parse.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
+import { OWNER_PY, createChat } from "./owner.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, PICKER, emojiMatches } from "./emoji.js";
@@ -56,6 +57,8 @@ tab=$(printf '%s\n' "$out" | sed -n 's/.*"tab": *"\\([^" ]*\\)".*/\\1/p')
 props=$(printf '%s' "$2" | sed "s|__TERM__|\${term##*/}|;s|__TAB__|\${tab##*/}|")
 split=$("$H" do pane.split "{\\"direction\\":\\"right\\",\\"mod\\":\\"chat\\",\\"props\\":$props}") || { echo "$split" >&2; exit 1; }
 pane=$(printf '%s\n' "$split" | sed -n 's/.*"pane": *"\\([^"]*\\)".*/\\1/p')
+[ -n "$pane" ] || { echo "No chat pane returned" >&2; exit 1; }
+python3 -c "$3" bind "$pane" "$tab" "$term" || exit 1
 [ -n "$pane" ] && "$H" do pane.zoom "{\\"pane\\":\\"$pane\\"}" >/dev/null
 echo "$term"`;
 
@@ -1440,7 +1443,7 @@ export default class Chat extends View {
         setShared("chat.kind", kind);
         const spec = { folder, machine: machine ?? "", argv: launchArgv(kind, model, effort), ...(task ? { task } : {}) };
         const chatProps = { terminal: "__TERM__", owner_tab: "__TAB__", started: true, model, effort };
-        const r = await exec("sh", ["-c", NEW_SPACE, "sh", JSON.stringify(spec), JSON.stringify(chatProps)]);
+        const r = await exec("sh", ["-c", NEW_SPACE, "sh", JSON.stringify(spec), JSON.stringify(chatProps), OWNER_PY]);
         if (r.code !== 0) throw new Error(r.stderr.trim() || "Couldn't start the chat");
         closeOverlay(props().overlay);
       } catch (e) {
@@ -1466,7 +1469,7 @@ export default class Chat extends View {
         const pane = target?.pane;
         if (!pane) throw new Error("That agent has no pane to open beside");
         run("pane.focus", { pane });
-        await herdr("pane.split", { direction: "right", pane, mod: "chat", props: chatProps(address, target.tab) });
+        await createChat({ pane, tab: target.tab, terminal: address });
         closeOverlay(props().overlay);
       } catch (e) {
         this.error = String(e?.message ?? e);

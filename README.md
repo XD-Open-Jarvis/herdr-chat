@@ -36,7 +36,10 @@ Changes from upstream:
   client's machine alias, including for old fully qualified terminal values.
   A local `t8` is never used as a fallback for a missing remote `mini/t8`.
   Missing/ambiguous owner context shows an explicit error instead of selecting
-  another machine. New chats save the owner context when they are created.
+  another machine. New chats bind their exact returned pane ID after creation. Opening 对话
+  reuses a fully owned Chat in that terminal’s tab, even when old Chat panes
+  coexist. The creation transaction updates only the new pane with version
+  checks; it does not repair or delete old panes.
 - **More readable chat.** Base text is 15 px, tuned against the Alma reference. Image bounds:
   message/expanded tool images 420×300, collapsed tool thumbnails 312×215,
   attachment previews 144×108 logical pixels, preserving aspect ratio without upscaling.

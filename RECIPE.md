@@ -1,7 +1,9 @@
 # Herdr Chat
 
 Fork additions: persist `terminal` as a machine-local ID and `owner_tab` as the
-owning tab's local ID. An explicit local `owner_pane` can disambiguate a pane.
+owning tab's local ID. Every new Chat must save its own local `owner_pane` after `pane.split`
+returns its ID. `owner.js` binds that exact new node with core version checks;
+this is part of creation, and must not become an installer/session migration.
 Match that owner against live chat panes, then qualify the saved
 terminal using the matched pane's current tab prefix. Ignore any old alias saved
 inside `terminal`. Never search globally for a bare terminal or use the active
@@ -13,8 +15,9 @@ updates with backups. Test a new chat created from the agent's own terminal.
 
 Show the shared segmented header even on a supported terminal
 without a chat pane yet. The first 对话 click creates its chat once, then zooms
-and focuses it; selecting 终端 on a fresh terminal is a no-op. A same-tab chat
-must still be found when the shared pane-to-terminal map has not been populated.
+and focuses it; selecting 终端 on a fresh terminal is a no-op. Read the known terminal’s exact tab on its owning machine to find a fully owned
+Chat even before the shared pane map is populated. Leave unbound old panels
+untouched; never choose one merely because it is in the same tab.
 Only send a focus-border layout update once while its desired color is pending.
 Use `scripts/install.py --update` for coordinated installs with backups and
 `--diagnose` for read-only file/header/version checks on another Mac.

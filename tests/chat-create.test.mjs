@@ -21,10 +21,15 @@ if(command==='space.new')console.log(JSON.stringify({terminal:'mini/t8',tab:'min
 else if(command==='pane.split')console.log(JSON.stringify({pane:'mini/p-chat'}));
 else console.log(JSON.stringify({ok:true}));
 `,{mode:0o755});
-  execFileSync('sh',['-c',script,'sh','{}',JSON.stringify({terminal:'__TERM__',owner_tab:'__TAB__',started:true})],
+  writeFileSync(join(dir,'python3'),`#!/usr/bin/env node
+const fs=require('node:fs');
+fs.appendFileSync(process.env.CHAT_TEST_LOG,JSON.stringify({command:'bindOwner',args:process.argv.slice(4)})+'\\n');
+`,{mode:0o755});
+  execFileSync('sh',['-c',script,'sh','{}',JSON.stringify({terminal:'__TERM__',owner_tab:'__TAB__',started:true}),'OWNER_BINDER'],
     {env:{...process.env,PATH:dir+':'+process.env.PATH,CHAT_TEST_LOG:log}});
   const calls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(calls.find(c=>c.command==='pane.focus').args.terminal,'mini/t8');
   assert.deepEqual(calls.find(c=>c.command==='pane.split').args.props,{terminal:'t8',owner_tab:'tb-owner',started:true});
+  assert.deepEqual(calls.find(c=>c.command==='bindOwner').args,['bind','mini/p-chat','mini/tb-owner','mini/t8']);
  } finally {rmSync(dir,{recursive:true,force:true});}
 });

@@ -66,6 +66,8 @@ function headerSetup({linked=false,chat=true}={}) {
     View:class {},qualifyAddress,chatProps,machineOfTab,shared:()=>linked?{chat:terminal.address}:{},
     terminals:()=>[terminal],panes:()=>chat?[tui,conversation]:[tui],
     herdr:async(command,args)=>{calls.push([command,args]);return {pane:'new-chat'};},
+    openConversation:async(args)=>{calls.push(['openConversation',args]);return {pane:'new-chat'};},
+    bindOwner:async(...args)=>{calls.push(['bindOwner',...args]);},
     switchView:async(...args)=>{calls.push(['switchView',...args]);},
     notify:()=>assert.fail('unexpected switch error'),
   });
@@ -75,14 +77,14 @@ test('fresh terminal without a chat still gets the segmented header',()=>{
   const s=headerSetup({chat:false});const pair=s.view.chatPair(s.tui);
   assert.equal(pair.chat,null);assert.equal(pair.term,s.terminal);assert.equal(pair.terminalPane,'tui');
 });
-test('an existing chat is found even before the shared association is populated',()=>{
-  const s=headerSetup();assert.equal(s.view.chatPair(s.tui).chat,s.conversation);
+test('a same-tab chat without an explicit association is not guessed',()=>{
+  const s=headerSetup();assert.equal(s.view.chatPair(s.tui).chat,null);
 });
 test('first Chat selection creates a chat and then selects it in place',async()=>{
   const s=headerSetup({chat:false});let task;
   const cx={spawn(fn){task=fn(this);},notify(){}};
   s.view.selectView(s.view.chatPair(s.tui),'chat',cx);await task;
-  assert.equal(s.calls[0][0],'pane.split');assert.equal(s.calls[0][1].props.terminal,'t1');
+  assert.equal(s.calls[0][0],'openConversation');assert.equal(s.calls[0][1].terminal,'remote/t1');assert.equal(s.calls[0][1].tab,'remote/tab');
   assert.equal(s.calls[1][0],'switchView');assert.equal(s.calls[1][1],'new-chat');
   assert.equal(s.calls[1][3],'chat');
 });
