@@ -1,21 +1,20 @@
 // A chat view of an agent terminal (Claude Code or Codex): its session log
 // rendered as markdown with images, and a composer that types into it.
 // Opened as a dialog (mod.open:chat, Cmd+N) it is the New chat form: it starts
-// the agent in a new space and opens a chat pane there, zoomed over the
-// agent's terminal, with props { terminal, started: true }.
+// the agent in a new space and opens its client-local conversation view.
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, InputState, Input } from "gpui-base";
 import {
   exec, hc, run, props, terminals, panes, spaces, theme, settings, appHome, home,
   watchFolder, nextCommand, pickFolder, shared, setShared, closeOverlay, machines, openOverlay, notify,
-  window as appWindow,
+  layout, keys, window as appWindow,
 } from "herdr";
 import * as fs from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { Transcript } from "./parse.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
-import { OWNER_PY, createChat } from "./owner.js";
+import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, PICKER, emojiMatches } from "./emoji.js";
@@ -43,24 +42,39 @@ const tilde = (p) => (p?.startsWith(home()) ? "~" + p.slice(home().length) : p);
 // The shown space: where a new chat starts by default.
 const activeSpace = () => spaces().find((s) => s.active) ?? null;
 
-// Makes a space running the agent, opens a chat pane beside its terminal and
-// zooms the chat over it. One shell run, because showing the new space closes
-// the New chat dialog, and a closed dialog's unfinished tasks are cancelled.
+// Runs independently of the dialog after space.new changes the current space.
 const NEW_SPACE = `
-H=$(command -v herdr-app || echo "$HOME/.local/bin/herdr-app")
-out=$("$H" do space.new "$1") || { echo "$out" >&2; exit 1; }
-term=$(printf '%s\n' "$out" | sed -n 's/.*"terminal": *"\\([^"]*\\)".*/\\1/p')
-[ -n "$term" ] || { echo "$out" >&2; exit 1; }
-"$H" do pane.focus "{\\"terminal\\":\\"$term\\"}" >/dev/null
-tab=$(printf '%s\n' "$out" | sed -n 's/.*"tab": *"\\([^" ]*\\)".*/\\1/p')
-[ -n "$tab" ] || { echo "No tab returned for the new chat" >&2; exit 1; }
-props=$(printf '%s' "$2" | sed "s|__TERM__|\${term##*/}|;s|__TAB__|\${tab##*/}|")
-split=$("$H" do pane.split "{\\"direction\\":\\"right\\",\\"mod\\":\\"chat\\",\\"props\\":$props}") || { echo "$split" >&2; exit 1; }
-pane=$(printf '%s\n' "$split" | sed -n 's/.*"pane": *"\\([^"]*\\)".*/\\1/p')
-[ -n "$pane" ] || { echo "No chat pane returned" >&2; exit 1; }
-python3 -c "$3" bind "$pane" "$tab" "$term" || exit 1
-[ -n "$pane" ] && "$H" do pane.zoom "{\\"pane\\":\\"$pane\\"}" >/dev/null
-echo "$term"`;
+json, os, shutil, subprocess, sys, time = map(__import__, ("json", "os", "shutil", "subprocess", "sys", "time"))
+spec, tree, extra = map(json.loads, sys.argv[1:4])
+cli = shutil.which("herdr-app") or os.path.expanduser("~/.local/bin/herdr-app")
+def call(command, args):
+    result = subprocess.run([cli, "do", command, json.dumps(args)], capture_output=True, text=True, check=True)
+    reply = json.loads(result.stdout)
+    if reply.get("error"): raise RuntimeError(reply["error"])
+    return reply
+def find(node, id):
+    if node.get("id") == id: return node
+    for child in node.get("children", []):
+        found = find(child, id)
+        if found is not None: return found
+opened = call("space.new", spec)
+for attempt in range(40):
+    listing = json.loads(subprocess.check_output([cli, "ls"], text=True))
+    targets = [p for s in listing["spaces"] for t in s["tabs"] if t["id"] == opened["tab"]
+               for p in t.get("terminals", []) if p["terminal"] == opened["terminal"]]
+    if len(targets) == 1: break
+    time.sleep(.1)
+else: raise RuntimeError("The new terminal pane did not appear")
+local = lambda value: value.rsplit("/", 1)[-1]
+meta = {**extra, "presentation": True, "terminal": local(opened["terminal"]),
+        "owner_tab": local(opened["tab"]), "owner_pane": local(targets[0]["pane"])}
+for id in ("conversation-chat", "conversation-header"):
+    find(tree, id)["content"]["props"] = meta
+find(tree, "conversation-view")["active"] = "conversation-page"
+call("layout.set", {"layout": tree})
+call("chat.focus", {})
+print(json.dumps(opened))
+`;
 
 
 // Claude Code's permission modes, in its shift+tab order, and how its footer names them.
@@ -135,8 +149,9 @@ export default class Chat extends View {
     // The agent comes in props; localStorage is shared by copies with equal props.
     const p = props() ?? {};
     this.dialog = Boolean(p.overlay);
+    this.presentation = Boolean(p.presentation);
     this.terminalId = this.dialog ? null : localId(p.terminal);
-    this.owner = { owner_tab: p.owner_tab, owner_pane: p.owner_pane };
+    this.owner = { terminal: p.terminal, owner_tab: p.owner_tab, owner_pane: p.owner_pane };
     this.started = Boolean(p.started);
     // What the New chat form launched with; Claude doesn't log its effort.
     if (p.model || p.effort) this.chosen = { model: p.model, effort: p.effort, logged: null };
@@ -174,7 +189,7 @@ export default class Chat extends View {
       this.updateMention(cx);
       cx.notify();
     });
-    this.input.focus();
+    if (!this.presentation || this.chatVisible()) this.input.focus();
     this.search = InputState.new({ placeholder: "Search this conversation" });
     this.search.on("change", (_e, cx) => { this.off = 0; cx.notify(); });
     this.sideInput = TextareaState.new({ placeholder: "Ask about this conversation…" });
@@ -188,6 +203,11 @@ export default class Chat extends View {
     // The message box keeps ↑/↓ for itself; while the / menu is open (its
     // wrapper is then "ChatMenu") they move the menu's highlight instead.
     try {
+      if (this.presentation) {
+        const blocked = keys().filter((binding) =>
+          /^(pane\.(split|close|zoom|go|swap)|terminal\.(open|keep|park))(?::|$)/.test(binding.action));
+        cx.bind_keys(blocked.map((binding) => ({ keystroke: binding.keys, action: "chat_no_split", context: "ChatPresentation" })));
+      }
       cx.bind_keys([
         { keystroke: "up", action: "chat_menu_up", context: "ChatMenu > Input" },
         { keystroke: "down", action: "chat_menu_down", context: "ChatMenu > Input" },
@@ -239,7 +259,7 @@ export default class Chat extends View {
   }
 
   myPane() {
-    return ownerPane(this.owner ?? {}, panes());
+    return this.presentation ? presentationPane(this.owner ?? {}, panes()) : ownerPane(this.owner ?? {}, panes());
   }
 
   // Hidden copies stay alive in Herdr. Do not rebuild their transcript or
@@ -248,8 +268,10 @@ export default class Chat extends View {
     if (this.dialog) return true;
     const mine = this.myPane();
     if (!mine) return false;
+    if (this.presentation && !presentationVisible()) return false;
     const active = spaces().find((space) => space.active)?.tabs?.find((tab) => tab.active);
     if (active?.id !== mine.tab) return false;
+    if (this.presentation) return true;
     return !panes().some((pane) => pane.tab === mine.tab && pane.zoomed && pane.pane !== mine.pane);
   }
 
@@ -268,6 +290,7 @@ export default class Chat extends View {
   }
 
   closeChat() {
+    if (this.presentation) return showTerminal(this.myPane());
     const own = panes().find((p) => p.pane === this.pane && p.mod === "chat") ?? panes().find((p) => p.mod === "chat" && p.focused);
     if (!own) return;
     if (panes().some((p) => p.tab === own.tab && p.pane !== own.pane)) run("pane.close", { pane: own.pane });
@@ -1118,7 +1141,7 @@ export default class Chat extends View {
   check(cx) {
     const term = this.terminal();
     const mine = this.myPane();
-    if (mine) {
+    if (mine && !this.presentation) {
       this.pane = mine.pane;
       const links = shared("chat.panes") ?? {};
       if (links[mine.pane] !== this.terminalId) {
@@ -1128,7 +1151,7 @@ export default class Chat extends View {
     }
     // The agent's own tab, while it's away from the chat: showing it (from the
     // Agents list) or the agent needing you brings it back; put it away again after.
-    const own = away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
+    const own = !this.presentation && away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
     if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
     if (!this.chatVisible()) return;
     if (this.sourceAddress !== this.term) {
@@ -1423,7 +1446,7 @@ export default class Chat extends View {
     cx.notify();
   }
 
-  // Starts the picked agent in a new space, with a chat pane over its terminal.
+  // Starts one terminal in a new space and selects its local Chat view.
   startChat(text, files, cx) {
     const { kind, machine } = this.cfg;
     const cat = this.loadCatalog(kind, machine, cx);
@@ -1440,8 +1463,9 @@ export default class Chat extends View {
         setShared("chat.recent", [{ folder, machine }, ...recent].slice(0, 6));
         setShared("chat.kind", kind);
         const spec = { folder, machine: machine ?? "", argv: launchArgv(kind, model, effort), ...(task ? { task } : {}) };
-        const chatProps = { terminal: "__TERM__", owner_tab: "__TAB__", started: true, model, effort };
-        const r = await exec("sh", ["-c", NEW_SPACE, "sh", JSON.stringify(spec), JSON.stringify(chatProps), OWNER_PY]);
+        const extra = { started: true, model, effort };
+        if (!presentationLayoutReady(layout())) throw new Error("Select the updated Chat layout first");
+        const r = await exec("python3", ["-c", NEW_SPACE, JSON.stringify(spec), JSON.stringify(layout()), JSON.stringify(extra)]);
         if (r.code !== 0) throw new Error(r.stderr.trim() || "Couldn't start the chat");
         closeOverlay(props().overlay);
       } catch (e) {
@@ -1459,15 +1483,15 @@ export default class Chat extends View {
     return s && (s.machine ?? null) === machine && s.folder ? s.folder : machine ? "" : home();
   }
 
-  // Opens a chat beside an agent that's already running.
+  // Opens a local conversation view for an agent already running.
   openBeside(address, cx) {
     cx.spawn(async (cx) => {
       try {
         const target = panes().find((p) => p.terminal === address);
         const pane = target?.pane;
-        if (!pane) throw new Error("That agent has no pane to open beside");
+        if (!pane) throw new Error("That agent has no terminal pane");
         run("pane.focus", { pane });
-        await createChat({ pane, tab: target.tab, terminal: address });
+        await openConversation({ pane, tab: target.tab, terminal: address });
         closeOverlay(props().overlay);
       } catch (e) {
         this.error = String(e?.message ?? e);
@@ -1525,7 +1549,7 @@ export default class Chat extends View {
     if (!mine || this.moving) return;
     this.moving = true;
     cx.spawn(async (cx) => {
-      try { await switchView(mine.pane, this.terminal(), "terminal"); }
+      try { if (this.presentation) await showTerminal(mine); else await switchView(mine.pane, this.terminal(), "terminal"); }
       catch (e) { this.error = `Couldn't switch to terminal: ${e?.message ?? e}`; }
       this.moving = false;
       cx.notify();
@@ -2158,7 +2182,8 @@ export default class Chat extends View {
         .child(`No agent here. Press ${shortcut("⇧N")} for a new chat.`);
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(15)
-      .key_context("ChatRoot")
+      .key_context(this.presentation ? "ChatRoot ChatPresentation" : "ChatRoot")
+      .on_action("chat_no_split", (_e, cx) => cx.stop_propagation())
       .on_action("chat_search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
       .on_action("chat_side_toggle", (_e, cx) => { this.side.open = !this.side.open; (this.side.open ? this.sideInput : this.input).focus(); cx.notify(); })
       .on_drop((e, cx) => this.addFiles(e.paths, cx))

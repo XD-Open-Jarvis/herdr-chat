@@ -40,7 +40,11 @@ def matches(path, home):
         header = nodes['main']['content']['pane']['header']
         return (header['content']['mod'] == 'chat-pane' and header['height'] == 44
                 and nodes['tabs']['content']['mod'] == 'chat-tabs'
-                and nodes['spaces']['content']['mod'] == 'spaces-chat')
+                and nodes['spaces']['content']['mod'] == 'spaces-chat'
+                and nodes['conversation-view']['type'] == 'stack'
+                and nodes['conversation-chat']['content']['mod'] == 'chat'
+                and nodes['conversation-chat']['content']['props']['presentation'] is True
+                and nodes['conversation-header']['content']['mod'] == 'chat-pane')
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

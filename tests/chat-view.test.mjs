@@ -63,6 +63,7 @@ function headerSetup({linked=false,chat=true}={}) {
   const conversation={pane:'chat',mod:'chat',tab:tui.tab};
   const calls=[];
   const Pane=runInNewContext(headerSource+'\nPane',{
+    props:()=>({}),showTerminal:async(args)=>calls.push(["showTerminal",args]),
     View:class {},qualifyAddress,chatProps,machineOfTab,shared:()=>linked?{chat:terminal.address}:{},
     terminals:()=>[terminal],panes:()=>chat?[tui,conversation]:[tui],
     herdr:async(command,args)=>{calls.push([command,args]);return {pane:'new-chat'};},
@@ -80,13 +81,12 @@ test('fresh terminal without a chat still gets the segmented header',()=>{
 test('a same-tab chat without an explicit association is not guessed',()=>{
   const s=headerSetup();assert.equal(s.view.chatPair(s.tui).chat,null);
 });
-test('first Chat selection creates a chat and then selects it in place',async()=>{
+test('Chat selection opens a client-local presentation without pane commands',async()=>{
   const s=headerSetup({chat:false});let task;
   const cx={spawn(fn){task=fn(this);},notify(){}};
   s.view.selectView(s.view.chatPair(s.tui),'chat',cx);await task;
   assert.equal(s.calls[0][0],'openConversation');assert.equal(s.calls[0][1].terminal,'remote/t1');assert.equal(s.calls[0][1].tab,'remote/tab');
-  assert.equal(s.calls[1][0],'switchView');assert.equal(s.calls[1][1],'new-chat');
-  assert.equal(s.calls[1][3],'chat');
+  assert.equal(s.calls.length,1); // no pane creation, focus or zoom command
 });
 test('selecting TUI on a fresh terminal does not create a chat',()=>{
   const s=headerSetup({chat:false});s.view.selectView(s.view.chatPair(s.tui),'terminal',{});

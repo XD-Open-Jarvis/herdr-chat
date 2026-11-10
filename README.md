@@ -31,15 +31,16 @@ If the Mac is still sluggish, provide that output; updating the files alone does
 not establish the cause of every terminal performance issue.
 
 Changes from upstream:
-- **Remote chat identity follows its owning pane.** Props persist local terminal
-  IDs and owner tab/pane IDs. At runtime the owning live tab supplies this
-  client's machine alias, including for old fully qualified terminal values.
-  A local `t8` is never used as a fallback for a missing remote `mini/t8`.
-  Missing/ambiguous owner context shows an explicit error instead of selecting
-  another machine. New chats bind their exact returned pane ID after creation. Opening 对话
-  reuses a fully owned Chat in that terminal’s tab, even when old Chat panes
-  coexist. The creation transaction updates only the new pane with version
-  checks; it does not repair or delete old panes.
+- **Chat is a client-local view, not another shared pane.** Terminal mode shows
+  the original split tree. 对话 opens the selected terminal's Chat across the
+  tab content area; 终端 restores the original splits and focuses that terminal.
+  Chat has no split controls and consumes pane-structure keyboard shortcuts.
+  Other layouts and mobile clients continue seeing the original TUI panes.
+  Opening or switching views never creates, closes, parks or zooms shared panes.
+  Old Chat panes remain untouched; installation does not migrate session data.
+- **Remote identity follows the original terminal pane.** The personal layout
+  saves local terminal/tab/pane IDs. Runtime addresses use the owning pane's
+  current client connection prefix. Missing or ambiguous owners are rejected.
 - **More readable chat.** Base text is 15 px, tuned against the Alma reference. Image bounds:
   message/expanded tool images 420×300, collapsed tool thumbnails 312×215,
   attachment previews 144×108 logical pixels, preserving aspect ratio without upscaling.
@@ -53,18 +54,13 @@ Changes from upstream:
   label. Internal environment/task messages remain filtered.
 - **Fresh terminals also have the view selector.** Supported Claude/Codex panes
   show 对话 / 终端 before any chat has been created. The first Chat selection
-  creates and opens its chat; existing pairs continue switching in place.
+  opens a client-local conversation view without creating a pane.
 - **Pending border writes are deduplicated.** A delayed or rejected layout change
   is not resent on every redraw.
 - **One Alma-style conversation header.** A 44 px bar shows workspace / session
   title on the left, and 对话 / 终端 on the right. The redundant `chat` title
   and inner agent toolbar are replaced by this single header. Search remains
   available in chat mode and with the existing keyboard shortcut.
-- **Chat / TUI switches in place.** The control selects and zooms the existing
-  chat or agent pane in the same tab, without opening a new split or swapping
-  panes. Repeated clicks keep the current view. Terminals parked by older
-  versions are restored before switching. Other split panes are preserved in
-  the tab and reappear when zoom is cancelled. Both modes keep the selector.
 - **Move to chat recovers after closing a chat in another layout.** A stale
   `chat.tab` label no longer suppresses the button. Existing hidden chats still
   offer Back to chat, including on remote machines.

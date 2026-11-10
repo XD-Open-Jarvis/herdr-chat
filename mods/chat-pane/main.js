@@ -1,4 +1,4 @@
-import { openChat as openConversation, bindOwner } from "./owner.js";
+import { openChat as openConversation, showTerminal, presentationPane } from "./presentation.js";
 import { qualifyAddress, machineOfTab } from "./identity.js";
 // A pane's header, for layouts that frame their panes:
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "chat-pane" } } } }
@@ -78,7 +78,7 @@ export default class Pane extends View {
   }
 
   me() {
-    return panes().find((p) => p.pane === props()?.pane);
+    return props()?.presentation ? presentationPane(props(), panes()) : panes().find((p) => p.pane === props()?.pane);
   }
 
   button(t, id, icon, command, args) {
@@ -99,7 +99,8 @@ export default class Pane extends View {
     const t = theme();
     if (props()?.overlay) return this.question(t);
     const p = this.me();
-    if (!p) return div();
+    if (!p) return props()?.presentation ? div().size_full().child(div().px(14).py(10).cursor_pointer()
+      .on_click(() => run("layout.select", { stack: "conversation-view", child: "main" })).child("终端")) : div();
     const pair = this.chatPair(p);
     if (pair) return this.conversationHeader(p, pair, t);
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
@@ -150,19 +151,16 @@ export default class Pane extends View {
   }
 
   selectView(pair, mode, cx) {
-    if (this.switching || (!pair.chat && mode === "terminal")) return;
+    if (this.switching) return;
+    if (!props()?.presentation && mode === "terminal") return;
     this.switching = true;
     cx.spawn(async (cx) => {
       try {
-        let chat = pair.chat;
-        if (mode === "chat" && pair.terminalPane) {
-          chat = await openConversation({ pane: pair.terminalPane, tab: pair.tab, terminal: pair.term.address });
-        } else if (chat) {
-          await bindOwner(chat.pane, chat.tab, pair.term.address);
-        }
-        await switchView(chat.pane, pair.term, mode);
-      }
-      catch (e) { notify({ title: "Couldn't switch view", body: String(e?.message ?? e), level: "error" }); }
+        const target = { pane: pair.terminalPane ?? this.me()?.pane,
+          tab: pair.tab ?? this.me()?.tab, terminal: pair.term.address };
+        if (mode === "chat") await openConversation(target);
+        else await showTerminal(target);
+      } catch (e) { notify({ title: "Couldn't switch view", body: String(e?.message ?? e), level: "error" }); }
       this.switching = false;
       cx.notify();
     });
@@ -171,7 +169,7 @@ export default class Pane extends View {
   conversationHeader(p, pair, t) {
     const space = spaces().find((s) => s.tabs?.some((tab) => tab.id === (pair.chat?.tab ?? p.tab)));
     const title = pair.term.title || pair.term.name || pair.term.report?.app || "Chat";
-    const chatMode = p.mod === "chat";
+    const chatMode = Boolean(props()?.presentation) || p.mod === "chat";
     const segment = (mode, label) => div().id(`view-${mode}-${p.pane}`).px(12).h(28).rounded(7)
       .flex().items_center().justify_center().cursor_pointer().text_size(12.5).font_medium()
       .bg((mode === "chat") === chatMode ? t.raised : t.chrome)
@@ -182,7 +180,7 @@ export default class Pane extends View {
     return h_flex().id(`conversation-header-${p.pane}`).size_full().px(14).gap(10).items_center()
       .bg(t.background).text_size(13)
       .on_hover((on, cx) => { this.hovered = on; cx.notify(); })
-      .on_click(() => run("pane.focus", { pane: p.pane }))
+      .on_click(() => { if (!chatMode) run("pane.focus", { pane: p.pane }); })
       .child(div().flex_none().max_w(150).truncate().text_color(t.muted).child(space?.name ?? "herdr"))
       .child(div().flex_none().text_color(t.dim).child("/"))
       .child(div().flex_none().px(6).py(2).rounded(5).bg(t.chrome).text_size(11).text_color(t.muted)
@@ -196,7 +194,11 @@ export default class Pane extends View {
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click((_e, cx) => { cx.stop_propagation(); run("chat.search"); })
         .child(svg("mods/chat/icons/search.svg").size(14))))
-      .when(this.hovered, (el) => el.child(this.closeButton(t, p)))
+      .when(this.hovered && !chatMode, (el) => el
+        .child(this.splitButton(t, p, "right"))
+        .child(this.splitButton(t, p, "down"))
+        .child(this.button(t, `ph-z-${p.pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane: p.pane }))
+        .child(this.closeButton(t, p)))
       .child(h_flex().flex_none().p(3).gap(2).rounded(9).bg(t.chrome)
         .child(segment("chat", "对话")).child(segment("terminal", "终端")));
   }

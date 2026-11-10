@@ -1,5 +1,4 @@
-import { openChat as openConversation } from "./owner.js";
-import { switchView } from "./backstage.js";
+import { openChat as openConversation, findNode, presentationPane } from "./presentation.js";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, terminals, run, exec, home, notify, openOverlay, theme, window, shared, layout, settings } from "herdr";
@@ -95,9 +94,7 @@ export default class Tabs extends View {
     this.openingChat = true;
     cx.spawn(async (cx) => {
       try {
-        const created = await openConversation({ pane: agent.pane, tab: tab.id, terminal: agent.terminal });
-        const terminal = terminals().find((t) => t.address === agent.terminal);
-        await switchView(created.pane, terminal, "chat");
+        await openConversation({ pane: agent.pane, tab: tab.id, terminal: agent.terminal });
       } catch (error) { notify({ title: "Couldn't open the chat", body: String(error?.message ?? error), level: "error" }); }
       this.openingChat = false;
       cx.notify();
@@ -113,12 +110,21 @@ export default class Tabs extends View {
     const tabPanes = panes().filter((pane) => pane.tab === activeTab?.id);
     const single = tabPanes.length <= 1 || tabPanes.some((pane) => pane.zoomed);
     const tree = layout();
+    const view = findNode(tree, "conversation-view");
+    const meta = findNode(tree, "conversation-chat")?.content?.props;
+    const owner = meta && presentationPane(meta, panes());
+    const leaveChat = view?.active === "conversation-page" && (!owner || owner.tab !== activeTab?.id);
+    if (leaveChat && !this.leavingChat) {
+      this.leavingChat = true;
+      run("layout.select", { stack: "conversation-view", child: "main" });
+    }
+    if (!leaveChat) this.leavingChat = false;
     const frame = find(tree, "main")?.content?.pane;
     const focusColor = single ? (frame?.border?.color ?? "border") : "accent";
     // run() is asynchronous. Do not resend a file-writing command on every
     // redraw while it is pending (or if an older app rejects the change).
     if (frame?.focus?.color === focusColor) this.pendingFocusColor = null;
-    if (frame && frame.focus?.color !== focusColor && this.pendingFocusColor !== focusColor) {
+    if (view?.active !== "conversation-page" && frame && frame.focus?.color !== focusColor && this.pendingFocusColor !== focusColor) {
       this.pendingFocusColor = focusColor;
       const updated = JSON.parse(JSON.stringify(tree));
       find(updated, "main").content.pane.focus = {
@@ -170,7 +176,7 @@ export default class Tabs extends View {
     };
     const tab = shown.find((c) => c.active);
     const { chat, agent, back } = this.chatIn(tab, space);
-    const move = Boolean(agent && !chat);
+    const move = Boolean(agent);
     const backButton = h_flex().id("panel-back-chat").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
       .text_size(12).bg(t.chrome).text_color(t.accent).border_1().border_color(t.accent)
       .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)

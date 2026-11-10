@@ -96,34 +96,70 @@
           "type": "row",
           "children": [
             {
-              "id": "main",
-              "type": "block",
-              "content": {
-                "tab": "active",
-                "pane": {
-                  "header": {
-                    "content": {
-                      "mod": "chat-pane"
+              "id": "conversation-view",
+              "type": "stack",
+              "active": "main",
+              "children": [
+                {
+                  "id": "main",
+                  "type": "block",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "header": {
+                        "content": {
+                          "mod": "chat-pane"
+                        },
+                        "reveal": "always",
+                        "height": 44,
+                        "position": "top"
+                      },
+                      "background": "background",
+                      "border": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "focus": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "radius": 10,
+                      "gap": 8,
+                      "lone": true
+                    }
+                  },
+                  "children": []
+                },
+                {
+                  "id": "conversation-page",
+                  "type": "column",
+                  "children": [
+                    {
+                      "id": "conversation-header",
+                      "type": "block",
+                      "size": {
+                        "px": 44
+                      },
+                      "content": {
+                        "mod": "chat-pane",
+                        "props": {
+                          "presentation": true
+                        }
+                      }
                     },
-                    "reveal": "always",
-                    "height": 44,
-                    "position": "top"
-                  },
-                  "background": "background",
-                  "border": {
-                    "width": 1,
-                    "color": "border"
-                  },
-                  "focus": {
-                    "width": 1,
-                    "color": "border"
-                  },
-                  "radius": 10,
-                  "gap": 8,
-                  "lone": true
+                    {
+                      "id": "conversation-chat",
+                      "type": "block",
+                      "content": {
+                        "mod": "chat",
+                        "props": {
+                          "presentation": true
+                        }
+                      }
+                    }
+                  ]
                 }
-              },
-              "children": []
+              ]
             },
             {
               "id": "panel",

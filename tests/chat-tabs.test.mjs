@@ -13,7 +13,7 @@ function selection({ address = "t1", label, chatTab, chatMod = "chat" }) {
   const agent = { pane: "agent", tab: "work", terminal: address, focused: true };
   const allPanes = [agent, ...(chatTab ? [{ pane: "chat", tab: chatTab, mod: chatMod }] : [])];
   return runInNewContext(source + '\nnew Tabs().chatIn({ id: "work" }, { tabs: tabs })', {
-    View: class {}, terminals: () => [terminal], panes: () => allPanes,
+    View: class {}, terminals: () => [terminal], findNode:()=>null,presentationPane:()=>null,panes: () => allPanes,
     tabs: [{ id: "work" }, ...(chatTab ? [{ id: chatTab }] : [])],
   });
 }
@@ -53,7 +53,7 @@ function reconcile(paneList, color = "accent") {
   const calls = [];
   runInNewContext(findSource + framePrelude, {
     spaces: () => [{ active: true, tabs: [{ id: "work", active: true }] }],
-    panes: () => paneList, layout: () => tree,
+    findNode:()=>null,presentationPane:()=>null,panes: () => paneList, layout: () => tree,
     run: (command, args) => calls.push({ command, args }),
   });
   return { tree, calls };
@@ -84,7 +84,17 @@ test("pending border changes are not resent on every redraw", () => {
   const calls=[];
   const tree={id:'main',content:{pane:{border:{width:1,color:'border'},focus:{width:1,color:'accent'}}}};
   const context={spaces:()=>[{active:true,tabs:[{id:'work',active:true}]}],
-    panes:()=>[{tab:'work'}],layout:()=>tree,run:(...args)=>calls.push(args)};
+    findNode:()=>null,presentationPane:()=>null,panes:()=>[{tab:'work'}],layout:()=>tree,run:(...args)=>calls.push(args)};
   runInNewContext(findSource + 'function renderFrame() {\n' + framePrelude + '\n}\nrenderFrame(); renderFrame();',context);
   assert.equal(calls.length,1);
+});
+test('switching to another tab leaves local Chat mode without changing shared panes',()=>{
+ const calls=[];const owner={pane:'agent',tab:'previous',terminal:'t1'};
+ const tree={id:'conversation-view',active:'conversation-page'};
+ const context={spaces:()=>[{active:true,tabs:[{id:'next',active:true}]}],
+  panes:()=>[owner],layout:()=>tree,findNode:(_tree,id)=>id==='conversation-view'?tree:id==='conversation-chat'?{content:{props:{}}}:null,
+  presentationPane:()=>owner,run:(command,args)=>calls.push({command,args})};
+ runInNewContext(findSource+'function renderFrame() {\n'+framePrelude+'\n}\nrenderFrame(); renderFrame();',context);
+ assert.deepEqual(calls.map(c=>c.command),['layout.select']);
+ assert.equal(calls[0].args.child,'main');
 });
