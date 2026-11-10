@@ -1565,7 +1565,7 @@ export default class Chat extends View {
       .hover((s) => s.opacity(0.85)).on_click(action).child(text);
   }
 
-  img(ref, t, maxW = 360, maxH = 260) {
+  img(ref, t, maxW = 540, maxH = 390) {
     const c = this.images[ref];
     if (!c || typeof c === "string") {
       return div().w(120).h(80).rounded(8).bg(t.raised).flex().items_center().justify_center()
@@ -1595,7 +1595,7 @@ export default class Chat extends View {
       return v_flex().id(`row-${e.key}`).w_full().items_end().gap(4).on_hover(this.hover(e.key))
         .when(Boolean(e.from), (el) => el.child(div().text_size(11).text_color(t.dim).child(`hc · ${e.from}`)))
         .child(v_flex().w(w).flex_none().gap(8).px(14).py(10).rounded(14).bg(t.raised)
-          .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 280, 200)))))
+          .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 420, 300)))))
           .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))))
         .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
@@ -1751,7 +1751,7 @@ export default class Chat extends View {
         .child(div().flex_1().min_w(0).truncate().child(label))
         .when(running, (el) => el.child(div().flex_none().text_color(t.working).frames(SPINNER, 90)))
         .when(failed, (el) => el.child(div().flex_none().text_color(t.blocked).child("error"))))
-      .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 160, 110)))))
+      .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 240, 165)))))
       .when(open, (el) => el.children(e.items.map((i, n) => this.tool(e.key, n, i, t))));
   }
 
@@ -1762,7 +1762,7 @@ export default class Chat extends View {
       .child(h_flex().gap(6).text_size(12)
         .child(div().flex_none().font_semibold().text_color(t.muted).child(i.name))
         .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(i.summary)))
-      .when(i.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(i.images.map((im) => this.img(im.ref, t, 280, 200)))))
+      .when(i.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(i.images.map((im) => this.img(im.ref, t, 420, 300)))))
       .when(i.result !== null && i.result.trim() !== "", (el) => el.child(
         div().rounded(6).border_1().border_color(i.error ? t.blocked : t.border).text_size(11.5)
           .child(this.markdown(`${key}-r${n}`, "~~~~text\n" + clipped.join("\n") + "\n~~~~"))));
@@ -2006,7 +2006,7 @@ export default class Chat extends View {
       .bg(t.background).shadow_sm()
       .when(this.attach.length > 0, (el) => el.child(h_flex().px(12).pt(12).gap(8).flex_wrap().children(this.attach.map((a, n) =>
         div().relative()
-          .child(a.image ? this.img(a.image.ref, t, 96, 72) : div().px(10).py(8).rounded(8).bg(t.raised).text_size(11.5).child(a.name))
+          .child(a.image ? this.img(a.image.ref, t, 144, 108) : div().px(10).py(8).rounded(8).bg(t.raised).text_size(11.5).child(a.name))
           .child(div().id(`rm-${n}`).absolute().top(-6).right(-6).size(18).rounded_full().flex().items_center().justify_center()
             .bg(t.foreground).text_color(t.background).text_size(11).cursor_pointer().hover((s) => s.opacity(0.8))
             .on_click((_e, cx) => { this.attach.splice(n, 1); cx.notify(); }).child("×"))))))
@@ -2145,7 +2145,7 @@ export default class Chat extends View {
       return v_flex().id("root").size_full().bg(t.background).items_center().justify_center().text_color(t.dim)
         .child(`No agent here. Press ${shortcut("⇧N")} for a new chat.`);
     }
-    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(13)
+    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(14)
       .key_context("ChatRoot")
       .on_action("chat_search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
       .on_action("chat_side_toggle", (_e, cx) => { this.side.open = !this.side.open; (this.side.open ? this.sideInput : this.input).focus(); cx.notify(); })

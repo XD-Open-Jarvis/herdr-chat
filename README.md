@@ -7,6 +7,9 @@ This fork packages the customized layout used on our Macs. Install the **`custom
 > Preserve existing layouts, mods and keybindings; ask before replacing conflicts.
 
 Changes from upstream:
+- **More readable chat.** Base text is 14 px. Image bounds are 50% larger:
+  message/expanded tool images 420×300, collapsed tool thumbnails 240×165,
+  attachment previews 144×108 logical pixels, preserving aspect ratio without upscaling.
 - **Hidden chats suspend background work.** While the TUI or another tab is
   visible, Chat skips transcript UI construction, terminal screen scraping,
   session lookup and log polling. Returning to Chat resumes log catch-up.
