@@ -44,6 +44,9 @@ Changes from upstream:
 - **More readable chat.** Base text is 15 px, tuned against the Alma reference. Image bounds:
   message/expanded tool images 420×300, collapsed tool thumbnails 312×215,
   attachment previews 144×108 logical pixels, preserving aspect ratio without upscaling.
+- **Log watching stays bounded.** Quiet polling reuses one pending folder watch,
+  and file changes cancel the fallback timer. This avoids abandoned host tasks
+  accumulating when the timeout wins a Promise.race.
 - **Hidden chats suspend background work.** While the TUI or another tab is
   visible, Chat skips transcript UI construction, terminal screen scraping,
   session lookup and log polling. Returning to Chat resumes log catch-up.

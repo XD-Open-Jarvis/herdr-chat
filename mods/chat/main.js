@@ -13,6 +13,7 @@ import * as fs from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { Transcript } from "./parse.js";
+import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
@@ -1241,6 +1242,7 @@ export default class Chat extends View {
     this.error = null;
     const tail = new Tail(file, on);
     const dir = file.slice(0, file.lastIndexOf("/"));
+    const waitForChange = folderPoll(watchFolder, cx.timer, dir);
     cx.spawn(async (cx) => {
       while (gen === this.gen) {
         if (!this.chatVisible()) { await sleep(cx, 1000); continue; }
@@ -1261,7 +1263,7 @@ export default class Chat extends View {
           cx.notify();
         }
         if (on) await sleep(cx, 1500);
-        else await Promise.race([watchFolder(dir).catch(() => sleep(cx, 3000)), sleep(cx, 15000)]);
+        else await waitForChange();
       }
     });
   }

@@ -36,3 +36,6 @@ Use neutral focus borders with a single visible pane; accent for multiple panes.
 Do not resend pending layout.set updates on every redraw. Never let border
 reconciliation overwrite a pending Chat selection. Preserve existing shortcuts;
 new Chat uses Cmd+Shift+N / Ctrl+Shift+N.
+
+Use folderPoll for local log waits: one pending watch across fallback timeouts;
+cancel the losing timer. Promise.race alone does not cancel a pending watch.
