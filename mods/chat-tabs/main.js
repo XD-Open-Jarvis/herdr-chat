@@ -113,7 +113,11 @@ export default class Tabs extends View {
     const tree = layout();
     const frame = find(tree, "main")?.content?.pane;
     const focusColor = single ? (frame?.border?.color ?? "border") : "accent";
-    if (frame && frame.focus?.color !== focusColor) {
+    // run() is asynchronous. Do not resend a file-writing command on every
+    // redraw while it is pending (or if an older app rejects the change).
+    if (frame?.focus?.color === focusColor) this.pendingFocusColor = null;
+    if (frame && frame.focus?.color !== focusColor && this.pendingFocusColor !== focusColor) {
+      this.pendingFocusColor = focusColor;
       const updated = JSON.parse(JSON.stringify(tree));
       find(updated, "main").content.pane.focus = {
         width: frame.border?.width ?? 1, color: focusColor,

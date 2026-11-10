@@ -79,3 +79,12 @@ test("panes in other tabs do not cause focus highlighting", () => {
 test("a matching frame does not issue another layout mutation", () => {
   assert.equal(reconcile([{ tab: "work" }], "border").calls.length, 0);
 });
+
+test("pending border changes are not resent on every redraw", () => {
+  const calls=[];
+  const tree={id:'main',content:{pane:{border:{width:1,color:'border'},focus:{width:1,color:'accent'}}}};
+  const context={spaces:()=>[{active:true,tabs:[{id:'work',active:true}]}],
+    panes:()=>[{tab:'work'}],layout:()=>tree,run:(...args)=>calls.push(args)};
+  runInNewContext(findSource + 'function renderFrame() {\n' + framePrelude + '\n}\nrenderFrame(); renderFrame();',context);
+  assert.equal(calls.length,1);
+});

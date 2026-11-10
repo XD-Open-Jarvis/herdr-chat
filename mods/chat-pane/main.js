@@ -132,19 +132,34 @@ export default class Pane extends View {
   chatPair(p) {
     const links = shared("chat.panes") ?? {};
     const all = panes();
-    const chat = p.mod === "chat" ? p : all.find((x) => x.mod === "chat" && links[x.pane] === p.terminal);
-    if (!chat) return null;
-    const agent = p.mod === "chat" ? this.agentOf(chat) : p;
-    const address = links[chat.pane] ?? agent?.terminal;
-    const term = terminals().find((x) => x.address === address);
-    return term ? { chat, term } : null;
+    if (p.mod === "chat") {
+      const address = links[p.pane] ?? this.agentOf(p)?.terminal;
+      const term = terminals().find((x) => x.address === address);
+      return term ? { chat: p, term } : null;
+    }
+    const term = terminals().find((x) => x.address === p.terminal);
+    const kind = `${p.app ?? ""} ${term?.report?.app ?? ""} ${term?.foreground?.name ?? ""} ${term?.program?.key ?? ""} ${term?.argv?.[0] ?? ""}`.toLowerCase();
+    if (!term || !/claude|codex/.test(kind)) return null;
+    const linked = all.find((x) => x.mod === "chat" && links[x.pane] === p.terminal);
+    // A newly installed window may not have populated the shared map yet.
+    const sameTab = all.filter((x) => x.mod === "chat" && x.tab === p.tab);
+    const chat = linked ?? (sameTab.length === 1 ? sameTab[0] : null);
+    return { chat, term, terminalPane: p.pane, tab: p.tab };
   }
 
   selectView(pair, mode, cx) {
-    if (this.switching) return;
+    if (this.switching || (!pair.chat && mode === "terminal")) return;
     this.switching = true;
     cx.spawn(async (cx) => {
-      try { await switchView(pair.chat.pane, pair.term, mode); }
+      try {
+        let chat = pair.chat;
+        if (!chat) {
+          const created = await herdr("pane.split", { direction: "right", pane: pair.terminalPane,
+            mod: "chat", props: { terminal: pair.term.address } });
+          chat = { pane: created.pane };
+        }
+        await switchView(chat.pane, pair.term, mode);
+      }
       catch (e) { notify({ title: "Couldn't switch view", body: String(e?.message ?? e), level: "error" }); }
       this.switching = false;
       cx.notify();
@@ -152,7 +167,7 @@ export default class Pane extends View {
   }
 
   conversationHeader(p, pair, t) {
-    const space = spaces().find((s) => s.tabs?.some((tab) => tab.id === pair.chat.tab));
+    const space = spaces().find((s) => s.tabs?.some((tab) => tab.id === (pair.chat?.tab ?? p.tab)));
     const title = pair.term.title || pair.term.name || pair.term.report?.app || "Chat";
     const chatMode = p.mod === "chat";
     const segment = (mode, label) => div().id(`view-${mode}-${p.pane}`).px(12).h(28).rounded(7)

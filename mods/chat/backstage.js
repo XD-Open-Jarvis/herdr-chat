@@ -75,7 +75,12 @@ export async function show(term) {
 // Switch the existing pair in place. Never split, swap, park or kill on a
 // view toggle. Restore terminals parked by older versions before selecting.
 export async function switchView(chatPane, terminal, mode) {
-  let chat = panes().find((p) => p.pane === chatPane && p.mod === "chat");
+  let chat;
+  for (let i = 0; i < 30; i++) {
+    chat = panes().find((p) => p.pane === chatPane && p.mod === "chat");
+    if (chat) break;
+    await pause(0.1);
+  }
   if (!chat) throw new Error("This chat pane is no longer available");
   if (mode === "terminal" && away(terminal)) await show(terminal);
   let target;

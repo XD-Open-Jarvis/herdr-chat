@@ -1,6 +1,14 @@
 # Herdr Chat
 
-Fork additions: distinguish user input delivered through an `<hc from="…">`
+Fork additions: show the shared segmented header even on a supported terminal
+without a chat pane yet. The first 对话 click creates its chat once, then zooms
+and focuses it; selecting 终端 on a fresh terminal is a no-op. A same-tab chat
+must still be found when the shared pane-to-terminal map has not been populated.
+Only send a focus-border layout update once while its desired color is pending.
+Use `scripts/install.py --update` for coordinated installs with backups and
+`--diagnose` for read-only file/header/version checks on another Mac.
+
+Distinguish user input delivered through an `<hc from="…">`
 transport envelope from internal XML-wrapped messages. Unwrap the body and retain
 its sender in the transcript. Pause terminal scraping, log polling, session lookup
 and expensive UI construction whenever the chat is hidden by TUI zoom or another

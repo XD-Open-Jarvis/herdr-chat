@@ -6,6 +6,26 @@ This fork packages the customized layout used on our Macs. Install the **`custom
 > https://github.com/XD-Open-Jarvis/herdr-chat/tree/customized.
 > Preserve existing layouts, mods and keybindings; ask before replacing conflicts.
 
+For updates on another Mac, clone this branch and use the installer rather than
+copying only a mod or only the layout:
+
+```sh
+git clone --depth 1 --branch customized https://github.com/XD-Open-Jarvis/herdr-chat.git
+cd herdr-chat
+python3 scripts/install.py --update
+```
+
+The installer checks all five mods against the installed Herdr runtime first,
+backs up replaced files under `~/.config/herdr-app/backups/`, updates the layout
+and all runtime mod sources together, preserves conflicting shortcuts and selects
+`chat`. It does not restart Herdr or touch session/settings files. It supports
+`HERDR_APP_HOME` / `--home` for a separate app home.
+
+Read-only diagnosis: `python3 scripts/install.py --diagnose` reports the Herdr
+version, missing/outdated runtime files, required header routing and app errors.
+If the Mac is still sluggish, provide that output; updating the files alone does
+not establish the cause of every terminal performance issue.
+
 Changes from upstream:
 - **More readable chat.** Base text is 15 px, tuned against the Alma reference. Image bounds:
   message/expanded tool images 420×300, collapsed tool thumbnails 312×215,
@@ -18,6 +38,11 @@ Changes from upstream:
 - **hc-delivered input appears in the transcript.** Transport envelopes such
   as `<hc from="t1">hello</hc>` display as user messages with a small sender
   label. Internal environment/task messages remain filtered.
+- **Fresh terminals also have the view selector.** Supported Claude/Codex panes
+  show 对话 / 终端 before any chat has been created. The first Chat selection
+  creates and opens its chat; existing pairs continue switching in place.
+- **Pending border writes are deduplicated.** A delayed or rejected layout change
+  is not resent on every redraw.
 - **One Alma-style conversation header.** A 44 px bar shows workspace / session
   title on the left, and 对话 / 终端 on the right. The redundant `chat` title
   and inner agent toolbar are replaced by this single header. Search remains
@@ -51,7 +76,7 @@ files and review the diff before updating. Merge `keys.json`, run `herdr-app che
 on each mod, then `herdr-app do layout.switch '{"name":"chat"}'`.
 Do not copy your other Mac's `shared.json`, `view.json`, `data/`, `.state/` or window files.
 
-Regression checks: `node --test tests/*.test.mjs` (30 tests).
+Regression checks: `node --test tests/*.test.mjs` (35 JavaScript tests; installer tests: `python3 -m unittest discover -s tests -p 'test_*.py'`).
 
 ---
 

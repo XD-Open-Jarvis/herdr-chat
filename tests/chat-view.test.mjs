@@ -51,3 +51,39 @@ test('missing terminal fails without opening a replacement',async()=>{
 test('both mods ship identical switching helpers',()=>{
   assert.equal(source,readFileSync(new URL('../mods/chat-pane/backstage.js',import.meta.url),'utf8'));
 });
+
+const headerSource=readFileSync(new URL('../mods/chat-pane/main.js',import.meta.url),'utf8')
+  .replace(/^import[\s\S]*?;\n/gm,'').replace('export default class Pane','class Pane');
+function headerSetup({linked=false,chat=true}={}) {
+  const terminal={address:'remote/t1',report:{app:'codex'}};
+  const tui={pane:'tui',terminal:terminal.address,tab:'remote/tab',app:'codex'};
+  const conversation={pane:'chat',mod:'chat',tab:tui.tab};
+  const calls=[];
+  const Pane=runInNewContext(headerSource+'\nPane',{
+    View:class {},shared:()=>linked?{chat:terminal.address}:{},
+    terminals:()=>[terminal],panes:()=>chat?[tui,conversation]:[tui],
+    herdr:async(command,args)=>{calls.push([command,args]);return {pane:'new-chat'};},
+    switchView:async(...args)=>{calls.push(['switchView',...args]);},
+    notify:()=>assert.fail('unexpected switch error'),
+  });
+  return {view:new Pane(),tui,terminal,conversation,calls};
+}
+test('fresh terminal without a chat still gets the segmented header',()=>{
+  const s=headerSetup({chat:false});const pair=s.view.chatPair(s.tui);
+  assert.equal(pair.chat,null);assert.equal(pair.term,s.terminal);assert.equal(pair.terminalPane,'tui');
+});
+test('an existing chat is found even before the shared association is populated',()=>{
+  const s=headerSetup();assert.equal(s.view.chatPair(s.tui).chat,s.conversation);
+});
+test('first Chat selection creates a chat and then selects it in place',async()=>{
+  const s=headerSetup({chat:false});let task;
+  const cx={spawn(fn){task=fn(this);},notify(){}};
+  s.view.selectView(s.view.chatPair(s.tui),'chat',cx);await task;
+  assert.equal(s.calls[0][0],'pane.split');assert.equal(s.calls[0][1].props.terminal,'remote/t1');
+  assert.equal(s.calls[1][0],'switchView');assert.equal(s.calls[1][1],'new-chat');
+  assert.equal(s.calls[1][3],'chat');
+});
+test('selecting TUI on a fresh terminal does not create a chat',()=>{
+  const s=headerSetup({chat:false});s.view.selectView(s.view.chatPair(s.tui),'terminal',{});
+  assert.equal(s.calls.length,0);
+});
