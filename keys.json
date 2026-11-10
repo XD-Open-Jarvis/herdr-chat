@@ -1,3 +1,5 @@
 {
-  "global": { "secondary-n": "mod.open:chat" }
+  "global": {
+    "secondary-shift-n": "mod.open:chat"
+  }
 }

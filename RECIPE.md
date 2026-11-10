@@ -1,5 +1,14 @@
 # Herdr Chat
 
+Fork additions: keep the normal frame and header for a lone or zoomed pane;
+only use the accent focus border with multiple visible panes. `chat-tabs` updates
+`content.pane.focus` through `layout.set` as the active tab/zoom state changes.
+A `chat.tab` label is valid only when its machine-qualified destination contains
+an actual chat pane. Closing that pane from another layout must restore Move to chat.
+New-chat shortcuts in this fork are ⌘⇧N / Ctrl+Shift+N; preserve existing keys.
+The layout includes `layouts/chat.svg` for the settings picker.
+
+
 A chat window for the Claude Code and Codex agents running in Herdr. It reads the agent's own session log and shows the conversation as messages, with images, tool calls and the reply streaming in as it's written. It sends what you type into the agent's terminal. It also brings over what the Claude and ChatGPT apps add on top of a terminal:
 - a `/` command menu with chips;
 - a side chat that never interrupts the agent;
@@ -51,7 +60,7 @@ The terminal stays one click away.
 - **Elsewhere**:
   - The tab bar (`chat-tabs`) gets a **Move to chat** button left of Files and Changes, in the `accent` color with an `accent` border. It shows only while the shown tab has a Claude or Codex terminal and no chat; with a chat open, the chat's own header shows or hides the terminal.
   - The spaces sidebar (`spaces-chat`) gets **New chat there** buttons.
-  - ⌘N (Ctrl+N on Linux and Windows) opens the New chat form: pick the agent, folder, model and effort, then Start.
+  - ⌘⇧N (Ctrl+Shift+N on Linux and Windows) opens the New chat form: pick the agent, folder, model and effort, then Start.
 
 ## How it behaves
 
@@ -136,7 +145,7 @@ The terminal stays one click away.
 - **`mods/chat-tabs`** leaves settled tabs out unless one is shown.
 - **`mods/chat-tabs`**: a copy of the shipped `tabs` with the Move to chat button. It splits a chat pane to the right of the tab's agent with `run("pane.split")`, then zooms it once it shows up in `panes()`.
 - **`mods/spaces-chat`**: a copy of the shipped `spaces` sidebar whose + opens the New chat form.
-- **`keys.json`**: `secondary-n` → `mod.open:chat`. `secondary` is ⌘ on macOS and Ctrl on Linux and Windows, so one file fits every platform.
+- **`keys.json`**: `secondary-shift-n` → `mod.open:chat`. `secondary` is ⌘ on macOS and Ctrl on Linux and Windows, so one file fits every platform.
 
 ## Watch out
 
@@ -160,7 +169,7 @@ The terminal stays one click away.
 ## Done when
 
 - `herdr-app check` passes for `chat`, `chat-file`, `chat-pane`, `chat-tabs` and `spaces-chat`.
-- **Basics**: ⌘N (Ctrl+N on Linux), Start → a new space with the chat zoomed over a fresh agent, and the folder-trust question answered by itself. Sending a message shows it at once and the reply as it's written.
+- **Basics**: ⌘⇧N (Ctrl+Shift+N on Linux), Start → a new space with the chat zoomed over a fresh agent, and the folder-trust question answered by itself. Sending a message shows it at once and the reply as it's written.
 - **`/` menu**:
   - Typing `/` shows *Skills*, *Model ›* and *All commands ›*.
   - `/co` filters the list; ↓ moves; Tab puts a `/compact` chip in the box; Enter sends it.

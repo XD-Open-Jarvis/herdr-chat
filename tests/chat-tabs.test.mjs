@@ -41,3 +41,41 @@ test("remote labels resolve against machine-qualified pane tab ids", () => {
   assert.equal(result.agent, undefined);
   assert.equal(result.back, "remote/conversation");
 });
+
+// Run the same render prelude that reconciles the frame before building UI.
+const framePrelude = source.slice(source.indexOf("    const space = spaces().find(p => p.active);"),
+  source.indexOf("    // Settled tabs are put away"));
+const findSource = source.slice(source.indexOf("function find("), source.indexOf("// Claude Code or Codex"));
+function reconcile(paneList, color = "accent") {
+  const tree = { id: "root", children: [{ id: "main", content: { pane: {
+    border: { width: 1, color: "border" }, focus: { width: 1, color }, lone: true,
+  } } }] };
+  const calls = [];
+  runInNewContext(findSource + framePrelude, {
+    spaces: () => [{ active: true, tabs: [{ id: "work", active: true }] }],
+    panes: () => paneList, layout: () => tree,
+    run: (command, args) => calls.push({ command, args }),
+  });
+  return { tree, calls };
+}
+test("one pane keeps its normal frame while suppressing the focus accent", () => {
+  const { tree, calls } = reconcile([{ tab: "work" }]);
+  assert.equal(calls[0].args.layout.children[0].content.pane.focus.color, "border");
+  assert.equal(calls[0].args.layout.children[0].content.pane.lone, true);
+  assert.equal(tree.children[0].content.pane.focus.color, "accent");
+});
+test("a zoomed split uses the normal border", () => {
+  const { calls } = reconcile([{ tab: "work", zoomed: true }, { tab: "work" }]);
+  assert.equal(calls[0].args.layout.children[0].content.pane.focus.color, "border");
+});
+test("unzooming a split restores the focus accent", () => {
+  const { calls } = reconcile([{ tab: "work" }, { tab: "work" }], "border");
+  assert.equal(calls[0].args.layout.children[0].content.pane.focus.color, "accent");
+});
+test("panes in other tabs do not cause focus highlighting", () => {
+  const { calls } = reconcile([{ tab: "work" }, { tab: "other" }]);
+  assert.equal(calls[0].args.layout.children[0].content.pane.focus.color, "border");
+});
+test("a matching frame does not issue another layout mutation", () => {
+  assert.equal(reconcile([{ tab: "work" }], "border").calls.length, 0);
+});

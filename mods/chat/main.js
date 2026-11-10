@@ -2172,7 +2172,7 @@ export default class Chat extends View {
     const term = this.term ? this.terminal() : null;
     if (!this.dialog && !this.term) {
       return v_flex().id("root").size_full().bg(t.background).items_center().justify_center().text_color(t.dim)
-        .child(`No agent here. Press ${shortcut("N")} for a new chat.`);
+        .child(`No agent here. Press ${shortcut("⇧N")} for a new chat.`);
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(13)
       .key_context("ChatRoot")

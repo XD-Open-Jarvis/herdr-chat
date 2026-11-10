@@ -116,7 +116,7 @@
                   },
                   "focus": {
                     "width": 1,
-                    "color": "accent"
+                    "color": "border"
                   },
                   "radius": 10,
                   "gap": 8,
@@ -192,5 +192,6 @@
   "traffic_lights": [
     12,
     16
-  ]
+  ],
+  "preview": "layouts/chat.svg"
 }

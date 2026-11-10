@@ -31,8 +31,8 @@ function chatTabOf(pane) {
   const id = term?.labels?.["chat.tab"];
   if (!id) return null;
   const tab = term.address.includes("/") ? `${term.address.split("/")[0]}/${id}` : id;
-  // Other layouts can close the chat without clearing the terminal's label.
-  // A label alone must not hide Move to chat or offer a broken Back to chat.
+  // Closing a chat can leave its terminal label behind. Only a live chat
+  // pane counts; an orphaned label must not hide Move to chat.
   return panes().some((p) => p.tab === tab && p.mod === "chat") ? tab : null;
 }
 
@@ -105,6 +105,21 @@ export default class Tabs extends View {
   render() {
     const t = theme();
     const space = spaces().find(p => p.active);
+    // Only distinguish keyboard focus when multiple panes are visible.
+    // A zoomed pane is the only visible pane even if its tab has siblings.
+    const activeTab = space?.tabs?.find((tab) => tab.active);
+    const tabPanes = panes().filter((pane) => pane.tab === activeTab?.id);
+    const single = tabPanes.length <= 1 || tabPanes.some((pane) => pane.zoomed);
+    const tree = layout();
+    const frame = find(tree, "main")?.content?.pane;
+    const focusColor = single ? (frame?.border?.color ?? "border") : "accent";
+    if (frame && frame.focus?.color !== focusColor) {
+      const updated = JSON.parse(JSON.stringify(tree));
+      find(updated, "main").content.pane.focus = {
+        width: frame.border?.width ?? 1, color: focusColor,
+      };
+      run("layout.set", { layout: updated });
+    }
     // Settled tabs are put away (a chat's hidden agent terminal lives in one) unless shown.
     const shown = (space?.tabs ?? []).filter((x) => !x.settled || x.active);
     const stop = (_e, cx) => cx.stop_propagation();

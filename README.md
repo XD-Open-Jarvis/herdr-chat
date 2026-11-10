@@ -1,4 +1,41 @@
-# Herdr Chat
+# Herdr Chat — Jarvis edition
+
+This fork packages the customized layout used on our Macs. Install the **`customized` branch**:
+
+> Read `~/.config/herdr-app/AGENTS.md`, then install the layout from
+> https://github.com/XD-Open-Jarvis/herdr-chat/tree/customized.
+> Preserve existing layouts, mods and keybindings; ask before replacing conflicts.
+
+Changes from upstream:
+- **Move to chat recovers after closing a chat in another layout.** A stale
+  `chat.tab` label no longer suppresses the button. Existing hidden chats still
+  offer Back to chat, including on remote machines.
+- **One visible pane uses its normal border.** Rounded borders and headers remain;
+  only the focus accent is suppressed. A zoomed split counts as one visible pane.
+  Multiple visible panes retain the accent on the focused pane. The tab-bar mod
+  updates this automatically when tabs, splits or zoom change.
+- **New chat: ⌘⇧N on macOS / Ctrl+Shift+N elsewhere.** Merge the supplied keybinding
+  rather than overwriting `keys.json`. Existing ⌘N / Ctrl+N bindings stay intact.
+- Includes a layout-picker preview at `layouts/chat.svg`.
+
+The original `main` layout and machine/session state are not included or changed.
+Requires Herdr App with `layout.set`, `panes().zoomed` and the APIs used by the
+upstream mods. Requires `python3` and an installed/authenticated Claude Code or Codex CLI.
+The mods run programs, read agent session/config files, use agent connections and
+can edit files through their file dialog; review the recipe before installing.
+
+To install manually, download this branch into a separate folder, copy `layouts/chat.json`,
+`layouts/chat.svg` and the five mod folders into the corresponding Herdr app folders
+**only when those names are free**. For an existing install, back up your customized
+files and review the diff before updating. Merge `keys.json`, run `herdr-app check`
+on each mod, then `herdr-app do layout.switch '{"name":"chat"}'`.
+Do not copy your other Mac's `shared.json`, `view.json`, `data/`, `.state/` or window files.
+
+Regression checks: `node --test tests/chat-tabs.test.mjs`.
+
+---
+
+# Upstream Herdr Chat
 
 A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and Codex agents, with the terminal one click away. It works the way the Claude and ChatGPT apps do:
 - a `/` command menu;
@@ -14,7 +51,7 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 
 | | |
 |---|---|
-| ![New chat](screenshots/new-chat.png)<br>**New chat** (⌘N, or Ctrl+N on Linux and Windows): pick the agent, machine, folder, model and effort | ![The / menu](screenshots/command-menu.png)<br>**The `/` menu**: skills, the model and all commands |
+| ![New chat](screenshots/new-chat.png)<br>**New chat** (⌘⇧N, or Ctrl+Shift+N on Linux and Windows): pick the agent, machine, folder, model and effort | ![The / menu](screenshots/command-menu.png)<br>**The `/` menu**: skills, the model and all commands |
 | ![Searching commands](screenshots/command-search.png)<br>**Commands** with their descriptions, arguments and aliases | ![Side chat](screenshots/side-chat.png)<br>**Side chat**: ask without interrupting the agent |
 | ![A command running](screenshots/live-command.png)<br>**Live progress**: the command running now and its output | ![Context card](screenshots/context-card.png)<br>**Cards** for context, usage, MCP servers, memory |
 | ![A terminal picker in the chat](screenshots/terminal-picker.png)<br>**Terminal pickers** as buttons, right in the chat | ![Model picker](screenshots/model-picker.png)<br>**Pick, don't type**: models, sessions, permission modes |
@@ -45,17 +82,17 @@ A chat window for [Herdr](https://herdr.dev) that sits over your Claude Code and
 
 ## Install
 
-Ask the agent running in your Herdr: *"add the layout from github.com/naruse/herdr-chat"*. Or do it by hand:
+Ask the agent running in your Herdr: *"add the layout from github.com/XD-Open-Jarvis/herdr-chat/tree/customized"*. Or do it by hand:
 
 ```sh
-git clone https://github.com/naruse/herdr-chat
+git clone --branch customized https://github.com/XD-Open-Jarvis/herdr-chat
 cd herdr-chat
 cp -R mods/* ~/.config/herdr-app/mods/
 cp layouts/chat.json ~/.config/herdr-app/layouts/
 herdr-app do layout.switch '{"name":"chat"}'
 ```
 
-Then merge `keys.json` into `~/.config/herdr-app/keys.json`. Its `secondary-n` is New chat on ⌘N on macOS and Ctrl+N on Linux and Windows. On Linux and Windows, Ctrl+N then no longer reaches terminal programs, where shells use it for the next history line.
+Then merge `keys.json` into `~/.config/herdr-app/keys.json`. Its `secondary-shift-n` is New chat on ⌘⇧N on macOS and Ctrl+Shift+N on Linux and Windows. Existing Ctrl+N shell bindings are preserved.
 
 **Requirements:**
 - `python3`, and `claude` and/or `codex`, on the machine where the agents run.
@@ -75,7 +112,7 @@ To keep your own layout instead, point its pane header at `chat-pane` and its ta
 | `mods/chat-tabs` | The tab bar with a **Move to chat** button |
 | `mods/spaces-chat` | The spaces sidebar with **New chat there** |
 | `layouts/chat.json` | Herdr's main layout, using the mods above |
-| `keys.json` | New chat on ⌘N (macOS) or Ctrl+N (Linux and Windows), through `secondary-n` |
+| `keys.json` | New chat on ⌘⇧N (macOS) or Ctrl+Shift+N (Linux and Windows), through `secondary-shift-n` |
 
 ## License
 
