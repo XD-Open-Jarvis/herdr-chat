@@ -1751,7 +1751,7 @@ export default class Chat extends View {
         .child(div().flex_1().min_w(0).truncate().child(label))
         .when(running, (el) => el.child(div().flex_none().text_color(t.working).frames(SPINNER, 90)))
         .when(failed, (el) => el.child(div().flex_none().text_color(t.blocked).child("error"))))
-      .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 240, 165)))))
+      .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 312, 215)))))
       .when(open, (el) => el.children(e.items.map((i, n) => this.tool(e.key, n, i, t))));
   }
 
@@ -2145,7 +2145,7 @@ export default class Chat extends View {
       return v_flex().id("root").size_full().bg(t.background).items_center().justify_center().text_color(t.dim)
         .child(`No agent here. Press ${shortcut("⇧N")} for a new chat.`);
     }
-    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(14)
+    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(15)
       .key_context("ChatRoot")
       .on_action("chat_search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
       .on_action("chat_side_toggle", (_e, cx) => { this.side.open = !this.side.open; (this.side.open ? this.sideInput : this.input).focus(); cx.notify(); })
