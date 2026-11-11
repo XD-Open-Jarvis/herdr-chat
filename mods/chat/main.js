@@ -22,7 +22,7 @@ import { emojify, PICKER, emojiMatches } from "./emoji.js";
 import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
-import { copyText, pasteImage, openFile, pickFiles, imageSize } from "./platform.js";
+import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { herdr, chatTab, away, hide, show, switchView } from "./backstage.js";
 
@@ -1612,7 +1612,9 @@ export default class Chat extends View {
     }
     const k = Math.min(1, maxW / c.w, maxH / c.h);
     return div().id(`img-${ref}`).cursor_pointer().rounded(8).overflow_hidden().border_1().border_color(t.border)
-      .tooltip("Open").on_click(() => openFile(c.abs))
+      .tooltip("View image").on_click(() => openOverlay({ mod: "chat-file", kind: "window",
+        key: `chat-image-${ref}`, width: 900, height: 680,
+        props: { image: c.rel, imageWidth: c.w, imageHeight: c.h, title: c.abs.split("/").pop() } }))
       .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)));
   }
 

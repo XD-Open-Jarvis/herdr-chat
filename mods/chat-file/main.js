@@ -1,6 +1,6 @@
 // A file from the chat's /memory, /config and /hooks, opened to edit: a
 // dialog with the file, Save (⌘S) and Close. Props: { file, title, overlay }.
-import { View, div } from "gpui-kit";
+import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { props, theme, settings, readTextFile, writeTextFile, closeOverlay, exec } from "herdr";
 
@@ -9,6 +9,10 @@ const LANG = { md: "markdown", json: "json", toml: "toml", js: "javascript", sh:
 export default class ChatFile extends View {
   init(_props, cx) {
     const p = props() ?? {};
+    if (p.image) {
+      this.viewport = { width: 860, height: 610 };
+      return;
+    }
     this.file = p.file;
     this.saved = null; // the text on disk, once read (null: a new file)
     this.status = "Opening…";
@@ -45,9 +49,29 @@ export default class ChatFile extends View {
     });
   }
 
+  imageView(p, t) {
+    const scale = Math.min(1, Math.max(1, this.viewport.width - 24) / p.imageWidth,
+      Math.max(1, this.viewport.height - 24) / p.imageHeight);
+    return v_flex().id("image-window").size_full().bg(t.background).text_color(t.foreground)
+      .child(h_flex().h(40).px(14).gap(12).items_center().flex_none()
+        .child(div().flex_1().min_w(0).truncate().text_size(13).child(p.title ?? "Image"))
+        .child(div().id("close-image").px(8).py(4).rounded(5).cursor_pointer().tooltip("Close")
+          .hover(s => s.bg(t.hover))
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => { cx.stop_propagation(); closeOverlay(p.overlay); }).child("×")))
+      .child(div().id("image-viewport").flex_1().min_h(0).flex().items_center().justify_center().overflow_hidden()
+        .on_size_change((size, cx) => {
+          if (size.width !== this.viewport.width || size.height !== this.viewport.height) {
+            this.viewport = size; cx.notify();
+          }
+        })
+        .child(image(p.image).w(Math.round(p.imageWidth * scale)).h(Math.round(p.imageHeight * scale))));
+  }
+
   render() {
     const t = theme();
     const p = props() ?? {};
+    if (p.image) return this.imageView(p, t);
     const btn = (id, label, action, primary) => div().id(id).px(12).py(5).rounded(7).cursor_pointer().text_size(12.5)
       .bg(primary ? t.solid : t.raised).text_color(primary ? t.solid_foreground : t.foreground)
       .hover((s) => s.opacity(0.85)).on_click(action).child(label);
