@@ -16,7 +16,7 @@ import { Transcript } from "./parse.js";
 import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
-import { Tail, locate, agentKind, machineOf } from "./source.js";
+import { Tail, locate, agentKind, machineOf, forkCandidates } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, PICKER, emojiMatches } from "./emoji.js";
 import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
@@ -1175,14 +1175,23 @@ export default class Chat extends View {
       cx.spawn(async (cx) => {
         try {
           const file = await locate(term, kind);
+          if (this.term !== term.address) return;
           this.sig = sig;
+          if (this.pinnedSession && this.pinnedAddress === term.address) {
+            if (!this.forkCheckedAt || Date.now() - this.forkCheckedAt > 15000) {
+              this.forkCheckedAt = Date.now(); this.forks = await forkCandidates(this.file, term);
+            }
+            return;
+          }
           if (file && file !== this.file) this.start(file, machineOf(this.term), kind, cx);
           this.missing = !file && !this.file;
+          if (kind === "codex" && this.file && (!this.forkCheckedAt || Date.now() - this.forkCheckedAt > 15000)) {
+            this.forkCheckedAt = Date.now(); this.forks = await forkCandidates(this.file, term);
+          }
         } catch (e) {
           this.error = String(e?.message ?? e);
         }
-        this.locating = false;
-        cx.notify();
+        finally { this.locating = false; cx.notify(); }
       });
     }
     if (kind) this.loadCatalog(kind, machineOf(this.term), cx);
@@ -1870,6 +1879,15 @@ export default class Chat extends View {
 
   header(term, t) {
     return v_flex().flex_none()
+      .when(Boolean(this.forks?.length), el => el.child(h_flex().px(14).py(6).gap(8).items_center()
+        .child(div().text_size(12).text_color(t.muted).child("Fork detected · select the conversation shown in TUI"))
+        .children(this.forks.map(fork => this.button(`fork-${fork.id}`, `Switch to fork · ${fork.id.slice(-8)}`, (_e, cx) => {
+          this.pinnedSession = fork.file;
+          this.pinnedAddress = this.term;
+          this.pending = []; this.streamLoop = null; this.stream = null; this.running = null;
+          this.chosen = null; this.cmdKey = null; this.forks = [];
+          this.start(fork.file, machineOf(this.term), "codex", cx); cx.notify();
+        }, t)))))
       .when(Boolean(this.searching) && (this.shown(), true), (el) => el.child(h_flex().id("search-bar").key_context("ChatSearch")
         .on_action("chat_search_close", (_e, cx) => this.closeSearch(cx))
         .h(38).px(12).gap(8).items_center().border_t(1).border_color(t.border).bg(t.background)

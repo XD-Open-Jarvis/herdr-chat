@@ -74,3 +74,28 @@ export class Tail {
     return lines;
   }
 }
+
+// Fork candidates are offered explicitly: a sibling branch is not proof of
+// which thread the running TUI currently owns.
+export async function forkCandidates(file, term) {
+  const script = `
+import json,pathlib,sys
+parent=pathlib.Path(sys.argv[1])
+try:
+    meta=json.loads(parent.open().readline()).get("payload",{})
+except Exception:
+    print("[]");sys.exit()
+root=pathlib.Path.home()/".codex"/"sessions"
+found=[]
+for path in root.rglob("rollout-*.jsonl"):
+    try:
+        with path.open() as stream: m=json.loads(stream.readline()).get("payload",{})
+        if m.get("forked_from_id")==meta.get("id") and m.get("cwd")==meta.get("cwd") and m.get("originator")=="codex-tui":
+            found.append({"file":str(path),"id":m["id"],"timestamp":m.get("timestamp","")})
+    except Exception: pass
+print(json.dumps(sorted(found,key=lambda x:x["timestamp"],reverse=True)))
+`;
+  const result = await exec("python3", ["-c", script, file], { on: machineOf(term.address) });
+  if (result.code !== 0) return [];
+  try { return JSON.parse(result.stdout); } catch { return []; }
+}
