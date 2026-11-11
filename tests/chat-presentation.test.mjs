@@ -11,7 +11,7 @@ const all=[target,{pane:'connection/p-other',tab:target.tab,terminal:'connection
  {pane:'connection/p-old',tab:target.tab,mod:'chat'}];
 function setup(list=all){
  let local=structuredClone(tree);const calls=[];
- const api=runInNewContext(source.replace(/^import .*;\n/gm,'').replace(/\bexport /g,'')+'\n({openChat,showTerminal,findNode,viewLayout,presentationPane,presentationVisible})',{
+ const api=runInNewContext(source.replace(/^import .*;\n/gm,'').replace(/\bexport /g,'')+'\n({openChat,showTerminal,findNode,viewLayout,presentationPane,presentationVisible,activePage,pageMeta})',{
   localId,qualifyAddress,panes:()=>list,layout:()=>local,shared:()=> 'chat',
   herdr:async(command,args)=>{calls.push({command,args});if(command==='layout.set')local=args.layout;
    if(command==='layout.select')api.findNode(local,args.stack).active=args.child;},
@@ -21,11 +21,11 @@ function setup(list=all){
 test('Chat fills a local layout slot while all shared split panes stay unchanged',async()=>{
  const before=JSON.stringify(all),s=setup();await s.api.openChat(target);
  assert.deepEqual(s.calls.map(c=>c.command),['layout.set','chat.focus']);
- assert.equal(s.api.findNode(s.tree,'conversation-view').active,'conversation-page');
+ assert.equal(s.api.findNode(s.tree,'conversation-view').active,'conversation-page-tb-work-p-agent-t14');
  assert.equal(JSON.stringify(all),before);
- const meta=s.api.findNode(s.tree,'conversation-chat').content.props;
+ const meta=s.api.pageMeta(s.api.activePage(s.tree));
  assert.deepEqual(JSON.parse(JSON.stringify(meta)),{presentation:true,terminal:'t14',owner_tab:'tb-work',owner_pane:'p-agent'});
- assert.deepEqual(meta,s.api.findNode(s.tree,'conversation-header').content.props);
+ assert.deepEqual(meta,s.api.activePage(s.tree).children.find(c=>c.content?.mod==='chat-pane').content.props);
  assert(s.api.findNode(s.tree,'main').content.tab==='active');
 });
 test('returning to TUI restores original context tree and focus without zooming or splitting',async()=>{
@@ -38,7 +38,7 @@ test('returning to TUI restores original context tree and focus without zooming 
 });
 test('multiple terminals and old chats never cause new shared Chat panels',async()=>{
  const s=setup();await s.api.openChat(target);await s.api.showTerminal(target);await s.api.openChat(all[1]);
- assert.equal(s.api.findNode(s.tree,'conversation-chat').content.props.terminal,'t15');
+ assert.equal(s.api.pageMeta(s.api.activePage(s.tree)).terminal,'t15');
  assert(s.calls.every(c=>!c.command.startsWith('terminal.')&&!['pane.split','pane.zoom','pane.close','tab.close'].includes(c.command)));
 });
 test('runtime identity follows the owning pane current connection alias, not a saved alias',()=>{
@@ -60,7 +60,7 @@ const classSource=chatSource.replace(/^import[\s\S]*?;\n/gm,'').replace('export 
 test('local Chat resolves the original terminal pane and sleeps outside its selected layout/tab',()=>{
  const s=setup();let selected=true,active=target.tab;
  const Chat=runInNewContext(classSource+'\nChat',{View:class{},appWindow:()=>({platform:'macos'}),
-  presentationPane:s.api.presentationPane,presentationVisible:()=>selected,qualifyAddress,
+  presentationPane:s.api.presentationPane,presentationVisible:()=>selected,qualifyAddress,layout:()=>s.tree,
   panes:()=>all,spaces:()=>[{active:true,tabs:[{id:active,active:true}]}]});
  const view=Object.create(Chat.prototype);Object.assign(view,{presentation:true,terminalId:'t14',owner:{terminal:'t14',owner_tab:'tb-work',owner_pane:'p-agent'}});
  assert.equal(view.myPane(),target);assert.equal(view.term,'connection/t14');assert.equal(view.chatVisible(),true);
@@ -76,4 +76,17 @@ test('Chat consumes configured pane split and structure shortcuts without interc
  ],cx:{bind_keys:list=>calls.push(...list)}});
  assert.deepEqual(calls.map(b=>b.keystroke),['cmd-d','ctrl-x','cmd-shift-w']);
  assert(calls.every(b=>b.context==='ChatPresentation'&&b.action==='chat_no_split'));
+});
+
+test('each terminal retains stable block IDs and props across repeated Chat selections',async()=>{
+ const s=setup();await s.api.openChat(target);
+ const first=JSON.parse(JSON.stringify(s.api.activePage(s.tree)));
+ await s.api.openChat(all[1]);
+ assert.notEqual(s.api.activePage(s.tree).id,first.id);
+ assert.deepEqual(JSON.parse(JSON.stringify(s.api.findNode(s.tree,first.id))),first);
+ await s.api.openChat(target,{started:true});
+ assert.deepEqual(JSON.parse(JSON.stringify(s.api.activePage(s.tree))),first);
+ assert.equal(s.api.findNode(s.tree,'conversation-view').children.length,4);
+ assert.equal(s.api.presentationVisible(s.tree,s.api.pageMeta(s.api.activePage(s.tree))),true);
+ assert.equal(s.api.presentationVisible(s.tree,{owner_tab:'other',owner_pane:'other',terminal:'t14'}),false);
 });

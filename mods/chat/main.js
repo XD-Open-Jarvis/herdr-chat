@@ -70,9 +70,18 @@ else: raise RuntimeError("The new terminal pane did not appear")
 local = lambda value: value.rsplit("/", 1)[-1]
 meta = {**extra, "presentation": True, "terminal": local(opened["terminal"]),
         "owner_tab": local(opened["tab"]), "owner_pane": local(targets[0]["pane"])}
-for id in ("conversation-chat", "conversation-header"):
-    find(tree, id)["content"]["props"] = meta
-find(tree, "conversation-view")["active"] = "conversation-page"
+stack = find(tree, "conversation-view")
+page = json.loads(json.dumps(find(tree, "conversation-page")))
+key = meta["owner_tab"] + "-" + meta["owner_pane"] + "-" + meta["terminal"]
+def rename(node):
+    node["id"] += "-" + key
+    for child in node.get("children", []): rename(child)
+rename(page)
+for child in page["children"]:
+    if child.get("content", {}).get("mod") in ("chat", "chat-pane"):
+        child["content"]["props"] = meta
+stack["children"].append(page)
+stack["active"] = page["id"]
 call("layout.set", {"layout": tree})
 call("chat.focus", {})
 print(json.dumps(opened))
@@ -270,7 +279,7 @@ export default class Chat extends View {
     if (this.dialog) return true;
     const mine = this.myPane();
     if (!mine) return false;
-    if (this.presentation && !presentationVisible()) return false;
+    if (this.presentation && !presentationVisible(layout(), this.owner)) return false;
     const active = spaces().find((space) => space.active)?.tabs?.find((tab) => tab.active);
     if (active?.id !== mine.tab) return false;
     if (this.presentation) return true;

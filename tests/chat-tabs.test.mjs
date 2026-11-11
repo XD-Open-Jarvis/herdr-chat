@@ -13,7 +13,7 @@ function selection({ address = "t1", label, chatTab, chatMod = "chat" }) {
   const agent = { pane: "agent", tab: "work", terminal: address, focused: true };
   const allPanes = [agent, ...(chatTab ? [{ pane: "chat", tab: chatTab, mod: chatMod }] : [])];
   return runInNewContext(source + '\nnew Tabs().chatIn({ id: "work" }, { tabs: tabs })', {
-    View: class {}, terminals: () => [terminal], findNode:()=>null,presentationPane:()=>null,panes: () => allPanes,
+    View: class {}, terminals: () => [terminal], activePage:()=>null,pageMeta:()=>null,findNode:()=>null,presentationPane:()=>null,panes: () => allPanes,
     tabs: [{ id: "work" }, ...(chatTab ? [{ id: chatTab }] : [])],
   });
 }
@@ -53,7 +53,7 @@ function reconcile(paneList, color = "accent") {
   const calls = [];
   runInNewContext(findSource + "function reconcileFrame(){" + framePrelude + "} reconcileFrame();", {
     spaces: () => [{ active: true, tabs: [{ id: "work", active: true }] }],
-    findNode:()=>null,presentationPane:()=>null,panes: () => paneList, layout: () => tree,
+    activePage:()=>null,pageMeta:()=>null,findNode:()=>null,presentationPane:()=>null,panes: () => paneList, layout: () => tree,
     run: (command, args) => calls.push({ command, args }),
   });
   return { tree, calls };
@@ -84,7 +84,7 @@ test("pending border changes are not resent on every redraw", () => {
   const calls=[];
   const tree={id:'main',content:{pane:{border:{width:1,color:'border'},focus:{width:1,color:'accent'}}}};
   const context={spaces:()=>[{active:true,tabs:[{id:'work',active:true}]}],
-    findNode:()=>null,presentationPane:()=>null,panes:()=>[{tab:'work'}],layout:()=>tree,run:(...args)=>calls.push(args)};
+    activePage:()=>null,pageMeta:()=>null,findNode:()=>null,presentationPane:()=>null,panes:()=>[{tab:'work'}],layout:()=>tree,run:(...args)=>calls.push(args)};
   runInNewContext(findSource + 'function renderFrame() {\n' + framePrelude + '\n}\nrenderFrame(); renderFrame();',context);
   assert.equal(calls.length,1);
 });
@@ -93,7 +93,7 @@ test('switching to another tab leaves local Chat mode without changing shared pa
  const tree={id:'conversation-view',active:'conversation-page'};
  const context={spaces:()=>[{active:true,tabs:[{id:'next',active:true}]}],
   panes:()=>[owner],layout:()=>tree,findNode:(_tree,id)=>id==='conversation-view'?tree:id==='conversation-chat'?{content:{props:{}}}:null,
-  presentationPane:()=>owner,run:(command,args)=>calls.push({command,args})};
+  activePage:()=>({content:{props:{}}}),pageMeta:p=>p?.content?.props,presentationPane:()=>owner,run:(command,args)=>calls.push({command,args})};
  runInNewContext(findSource+'function renderFrame() {\n'+framePrelude+'\n}\nrenderFrame(); renderFrame();',context);
  assert.deepEqual(calls.map(c=>c.command),['layout.select']);
  assert.equal(calls[0].args.child,'main');
@@ -102,11 +102,11 @@ test('switching to another tab leaves local Chat mode without changing shared pa
 test("Chat is restored when returning to its tab and explicit TUI choice is retained",()=>{
  let active="a";
  const terminal={pane:"p",tab:"a",terminal:"t1"};
- let tree={id:"conversation-view",active:"conversation-page",children:[{id:"conversation-chat",content:{props:{terminal:"t1",owner_tab:"a",owner_pane:"p"}}}]};
+ let tree={id:"conversation-view",active:"conversation-page",children:[{id:"conversation-page",content:{props:{terminal:"t1",owner_tab:"a",owner_pane:"p"}}}]};
  const calls=[];
  const find=(n,id)=>n.id===id?n:(n.children??[]).map(x=>find(x,id)).find(Boolean);
  const ctx={spaces:()=>[{active:true,tabs:[{id:active,active:true}]}],panes:()=>[terminal],layout:()=>tree,
- findNode:find,presentationPane:meta=>meta.owner_tab==="a"?terminal:null,
+ activePage:t=>find(t,t.active),pageMeta:p=>p?.content?.props,findNode:find,presentationPane:meta=>meta.owner_tab==="a"?terminal:null,
  viewLayout:(t,target,meta)=>({...t,active:"conversation-page"}),div:()=>({}),
  run:(command,args)=>{calls.push(command);if(command==="layout.select")tree.active=args.child;else tree=args.layout;}};
  const render=runInNewContext(findSource+"function frame(){"+framePrelude+"} frame;",ctx);

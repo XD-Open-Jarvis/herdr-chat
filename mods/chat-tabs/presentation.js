@@ -15,14 +15,26 @@ export function findNode(node, id) {
 export function viewLayout(tree, target, extra = {}) {
   const updated = JSON.parse(JSON.stringify(tree));
   const stack = findNode(updated, "conversation-view");
-  const body = findNode(updated, "conversation-chat");
-  const head = findNode(updated, "conversation-header");
-  if (!stack || !body || !head) throw new Error("Select the updated Chat layout first");
-  const props = { ...extra, presentation: true, terminal: localId(target.terminal),
-    owner_tab: localId(target.tab), owner_pane: localId(target.pane) };
-  body.content.props = props;
-  head.content.props = props;
-  stack.active = "conversation-page";
+  const template = findNode(updated, "conversation-page");
+  if (!stack || !template) throw new Error("Select the updated Chat layout first");
+  const matches = (meta) => meta?.owner_tab === localId(target.tab)
+    && meta?.owner_pane === localId(target.pane) && meta?.terminal === localId(target.terminal);
+  let page = stack.children.find((child) => matches(pageMeta(child)));
+  if (!page) {
+    page = JSON.parse(JSON.stringify(template));
+    const key = `${localId(target.tab)}-${localId(target.pane)}-${localId(target.terminal)}`;
+    const rename = (node) => {
+      node.id += `-${key}`;
+      for (const child of node.children ?? []) rename(child);
+    };
+    rename(page);
+    const props = { ...extra, presentation: true, terminal: localId(target.terminal),
+      owner_tab: localId(target.tab), owner_pane: localId(target.pane) };
+    page.children.find((child) => child.content?.mod === "chat").content.props = props;
+    page.children.find((child) => child.content?.mod === "chat-pane").content.props = props;
+    stack.children.push(page);
+  }
+  stack.active = page.id;
   return updated;
 }
 
@@ -38,7 +50,13 @@ export async function openChat(target, extra = {}) {
   // Reject stale or mismatched targets before changing any local UI.
   if (!panes().some((p) => p.pane === target.pane && p.tab === target.tab && p.terminal === target.terminal))
     throw new Error("This terminal pane is no longer available");
-  await herdr("layout.set", { layout: viewLayout(layout(), target, extra) });
+  const current = layout();
+  const next = viewLayout(current, target, extra);
+  const page = activePage(next);
+  if (findNode(current, page.id))
+    await herdr("layout.select", { stack: "conversation-view", child: page.id });
+  else
+    await herdr("layout.set", { layout: next });
   await herdr("chat.focus", {});
   return { pane: target.pane };
 }
@@ -49,8 +67,20 @@ export async function showTerminal(target) {
     await herdr("pane.focus", { pane: target.pane });
 }
 
-export function presentationVisible(tree = layout()) {
-  return shared("layout") === "chat" && findNode(tree, "conversation-view")?.active === "conversation-page";
+export function pageMeta(page) {
+  return page?.children?.find((child) => child.content?.mod === "chat")?.content?.props;
+}
+
+export function activePage(tree) {
+  const stack = findNode(tree, "conversation-view");
+  return stack?.children?.find((child) => child.id === stack.active);
+}
+
+export function presentationVisible(tree = layout(), owner = null) {
+  const meta = pageMeta(activePage(tree));
+  return shared("layout") === "chat" && Boolean(meta?.presentation)
+    && (!owner || (meta.owner_tab === owner.owner_tab && meta.owner_pane === owner.owner_pane
+      && localId(meta.terminal) === localId(owner.terminal)));
 }
 
 export function presentationLayoutReady(tree) {

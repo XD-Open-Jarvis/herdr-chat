@@ -25,7 +25,7 @@ else console.log(JSON.stringify({ok:true}));
   const calls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(calls.map(c=>c.command),['space.new','layout.set','chat.focus']);
   const find=(n,id)=>n.id===id?n:(n.children||[]).map(c=>find(c,id)).find(Boolean);
-  assert.deepEqual(find(calls[1].args.layout,'conversation-chat').content.props,
+  assert.deepEqual(find(calls[1].args.layout,find(calls[1].args.layout,'conversation-view').active).children.find(c=>c.content?.mod==='chat').content.props,
    {started:true,presentation:true,terminal:'t8',owner_tab:'tb-owner',owner_pane:'p-agent'});
  }finally{rmSync(dir,{recursive:true,force:true});}
 });

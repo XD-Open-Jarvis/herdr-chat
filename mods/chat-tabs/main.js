@@ -1,4 +1,4 @@
-import { openChat as openConversation, findNode, presentationPane, viewLayout } from "./presentation.js";
+import { openChat as openConversation, findNode, presentationPane, activePage, pageMeta } from "./presentation.js";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, terminals, run, exec, home, notify, openOverlay, theme, window, shared, layout, settings } from "herdr";
@@ -111,27 +111,27 @@ export default class Tabs extends View {
     const single = tabPanes.length <= 1 || tabPanes.some((pane) => pane.zoomed);
     const tree = layout();
     const view = findNode(tree, "conversation-view");
-    const meta = findNode(tree, "conversation-chat")?.content?.props;
+    const meta = pageMeta(activePage(tree));
     const owner = meta && presentationPane(meta, panes());
     this.tabViews ??= new Map();
     const current = activeTab?.id;
     if (this.viewTab && this.viewTab !== current && view) {
-      if (view.active === "conversation-page" && owner?.tab === this.viewTab)
-        this.tabViews.set(this.viewTab, { ...meta });
+      if (view.active !== "main" && owner?.tab === this.viewTab)
+        this.tabViews.set(this.viewTab, view.active);
       else if (view.active === "main") this.tabViews.delete(this.viewTab);
     }
-    if (!this.viewTab && owner && view?.active === "conversation-page")
-      this.tabViews.set(owner.tab, { ...meta });
+    if (!this.viewTab && owner && view && view.active !== "main")
+      this.tabViews.set(owner.tab, view.active);
     if (this.viewTab !== current) {
       this.viewTab = current;
       const saved = this.tabViews.get(current);
-      const target = saved && presentationPane(saved, panes());
+      const target = saved && presentationPane(pageMeta(findNode(tree, saved)) ?? {}, panes());
       if (target && target.tab === current) {
-        run("layout.set", { layout: viewLayout(tree, target, saved) });
+        run("layout.select", { stack: "conversation-view", child: saved });
         return div();
       }
     }
-    const leaveChat = view?.active === "conversation-page" && (!owner || owner.tab !== current);
+    const leaveChat = view && view.active !== "main" && (!owner || owner.tab !== current);
     if (leaveChat && !this.leavingChat) {
       this.leavingChat = true;
       run("layout.select", { stack: "conversation-view", child: "main" });
@@ -142,7 +142,7 @@ export default class Tabs extends View {
     // run() is asynchronous. Do not resend a file-writing command on every
     // redraw while it is pending (or if an older app rejects the change).
     if (frame?.focus?.color === focusColor) this.pendingFocusColor = null;
-    if (!leaveChat && view?.active !== "conversation-page" && frame && frame.focus?.color !== focusColor && this.pendingFocusColor !== focusColor) {
+    if (!leaveChat && (!view || view.active === "main") && frame && frame.focus?.color !== focusColor && this.pendingFocusColor !== focusColor) {
       this.pendingFocusColor = focusColor;
       const updated = JSON.parse(JSON.stringify(tree));
       find(updated, "main").content.pane.focus = {
