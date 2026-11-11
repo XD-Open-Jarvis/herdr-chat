@@ -37,6 +37,22 @@ done | sort -u | { files=$(cat); [ "$(printf '%s\\n' "$files" | grep -c .)" = 1 
 export async function locate(term, kind) {
   const pid = term?.foreground?.pid;
   if (!pid) return null;
+  if (kind === "codex") {
+    const argv = term.foreground?.argv ?? [];
+    const resume = argv.indexOf("resume");
+    const explicit = resume >= 0 && /^[0-9a-f-]{36}$/.test(argv[resume + 1] ?? "") ? argv[resume + 1] : null;
+    const labeled = term.labels?.["chat.session.pid"] === String(pid) ? term.labels?.["chat.session.id"] : null;
+    const id = explicit ?? labeled;
+    if (id && /^[0-9a-f-]{36}$/.test(id)) {
+      const script = `import pathlib,json,sys
+matches=list((pathlib.Path.home()/".codex/sessions").rglob("rollout-*"+sys.argv[1]+".jsonl"))
+if len(matches)==1:
+    with matches[0].open() as f: meta=json.loads(f.readline()).get("payload",{})
+    if meta.get("id")==sys.argv[1]: print(matches[0])`;
+      const result = await exec("python3", ["-c", script, id], { on: machineOf(term.address) });
+      return result.code === 0 ? result.stdout.trim() || null : null;
+    }
+  }
   const on = machineOf(term.address);
   const r = await sh(kind === "codex" ? CODEX : CLAUDE, [String(pid), term.foreground.cwd ?? ""], on);
   return r.stdout.trim().split("\n")[0] || null;

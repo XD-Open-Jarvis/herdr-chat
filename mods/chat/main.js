@@ -1170,7 +1170,9 @@ export default class Chat extends View {
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
     const sessionKey = JSON.stringify([this.owner?.owner_tab, this.owner?.owner_pane, this.terminalId, term?.foreground?.pid]);
-    const selectedSession = (shared("chat.sessions") ?? {})[sessionKey];
+    const exactSession = term?.labels?.["chat.session.pid"] === String(term?.foreground?.pid) || (term?.foreground?.argv ?? []).some((value, index, argv) => argv[index - 1] === "resume" && /^[0-9a-f-]{36}$/.test(value));
+    const selectedSession = exactSession ? null : (shared("chat.sessions") ?? {})[sessionKey];
+    if (exactSession) this.pinnedSession = null;
     if (kind === "codex" && selectedSession && selectedSession !== this.file) {
       this.pinnedSession = selectedSession; this.pinnedAddress = term.address;
       this.start(selectedSession, machineOf(term.address), kind, cx);
