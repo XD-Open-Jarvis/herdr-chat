@@ -13,6 +13,7 @@ import * as fs from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { Transcript } from "./parse.js";
+import { inheritedHistory } from "./history.js";
 import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
@@ -1253,6 +1254,21 @@ export default class Chat extends View {
     const dir = file.slice(0, file.lastIndexOf("/"));
     const waitForChange = folderPoll(watchFolder, cx.timer, dir);
     cx.spawn(async (cx) => {
+      if (kind === "codex") {
+        try {
+          const initial = await inheritedHistory(file, on);
+          if (gen !== this.gen) return;
+          tail.offset = initial.offset;
+          tail.truncated = initial.truncated;
+          this.truncated = initial.truncated;
+          for (const line of initial.lines) this.t.feed(line);
+          this.grew = true;
+          if (this.chatVisible()) { this.cacheShown(cx); cx.notify(); }
+        } catch (error) {
+          if (gen === this.gen) { this.error = String(error?.message ?? error); cx.notify(); }
+          return;
+        }
+      }
       while (gen === this.gen) {
         if (!this.chatVisible()) { await sleep(cx, 1000); continue; }
         try {
