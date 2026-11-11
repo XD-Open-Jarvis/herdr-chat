@@ -26,7 +26,7 @@ for p in "$1" $(pgrep -P "$1"); do
   [ -n "$log" ] && echo "$log" && exit 0
 done`;
 
-// Codex keeps its rollout file open; fall back to the newest one for this folder.
+// An open rollout is a candidate, not proof after an in-process fork.
 const CODEX = `
 kids=$(pgrep -P "$1" | tr '\\n' ' ')
 grand=$(for k in $kids; do pgrep -P "$k"; done | tr '\\n' ' ')

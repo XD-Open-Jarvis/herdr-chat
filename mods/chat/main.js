@@ -17,7 +17,8 @@ import { inheritedHistory } from "./history.js";
 import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
-import { Tail, locate, agentKind, machineOf, forkCandidates } from "./source.js";
+import { resolveSession } from "./session.js";
+import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, PICKER, emojiMatches } from "./emoji.js";
 import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
@@ -1165,8 +1166,10 @@ export default class Chat extends View {
     const own = !this.presentation && away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
     if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
     if (!this.chatVisible()) return;
-    if (this.sourceAddress !== this.term) {
-      this.sourceAddress = this.term;
+    const identitySource = `${this.term}:${term?.foreground?.pid}`;
+    if (this.sourceAddress !== identitySource) {
+      this.sourceAddress = identitySource;
+      this.sessionResolved = false;
       this.gen++;
       this.file = null;
       this.t = null;
@@ -1178,33 +1181,37 @@ export default class Chat extends View {
     const kind = agentKind(term);
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
-    const sessionKey = JSON.stringify([this.owner?.owner_tab, this.owner?.owner_pane, this.terminalId, term?.foreground?.pid]);
-    const selectedSession = (shared("chat.sessions") ?? {})[sessionKey];
-    if (kind === "codex" && selectedSession && selectedSession !== this.file) {
-      this.pinnedSession = selectedSession; this.pinnedAddress = term.address;
-      this.start(selectedSession, machineOf(term.address), kind, cx);
-    }
     const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
     this.ticks++;
     if (sig && !this.locating && (sig !== this.sig || this.ticks % 3 === 0 || !this.file)) {
       this.locating = true;
       cx.spawn(async (cx) => {
         try {
-          const file = await locate(term, kind);
-          if (this.term !== term.address) return;
+          let file = null;
+          try { file = await locate(term, kind); }
+          catch (error) { if (kind !== "codex") throw error; }
+          if (kind === "codex") {
+            const screen = await hc(["read", term.address]);
+            const result = await resolveSession(term, screen.stdout, file);
+            file = result.file;
+          }
+          if (`${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
           this.sig = sig;
-          if (this.pinnedSession && this.pinnedAddress === term.address) {
-            if (!this.forkCheckedAt || Date.now() - this.forkCheckedAt > 15000) {
-              this.forkCheckedAt = Date.now(); this.forks = await forkCandidates(this.file, term);
-            }
-            return;
+          this.sessionResolved = Boolean(file);
+          this.error = null;
+          if (!file && kind === "codex") {
+            this.gen++; this.file = null; this.t = null;
+            this.streamLoop = null; this.stream = null; this.running = null;
           }
           if (file && file !== this.file) this.start(file, machineOf(this.term), kind, cx);
           this.missing = !file && !this.file;
-          if (kind === "codex" && (!this.forkCheckedAt || Date.now() - this.forkCheckedAt > 15000)) {
-            this.forkCheckedAt = Date.now(); this.forks = await forkCandidates(this.file, term);
-          }
         } catch (e) {
+          if (`${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+          if (kind === "codex") {
+            this.sessionResolved = false;
+            this.gen++; this.file = null; this.t = null;
+            this.streamLoop = null; this.stream = null; this.running = null;
+          }
           this.error = String(e?.message ?? e);
         }
         finally { this.locating = false; cx.notify(); }
@@ -1438,6 +1445,7 @@ export default class Chat extends View {
   }
 
   send(cx) {
+    if (agentKind(this.terminal()) === "codex" && !this.sessionResolved) return;
     const menu = this.slash();
     if (menu) return this.choose(menu.pickable[menu.sel], cx);
     const mm = this.mentionMenu();
@@ -1910,17 +1918,6 @@ export default class Chat extends View {
 
   header(term, t) {
     return v_flex().flex_none()
-      .when(Boolean(this.forks?.length), el => el.child(h_flex().px(14).py(6).gap(8).items_center().overflow_x_scrollbar()
-        .child(div().text_size(12).text_color(t.muted).child("Select the conversation shown in TUI"))
-        .children(this.forks.map(fork => this.button(`fork-${fork.id}`, `${fork.timestamp.slice(0, 16)} · ${fork.id.slice(-8)}`, (_e, cx) => {
-          const key = JSON.stringify([this.owner?.owner_tab, this.owner?.owner_pane, this.terminalId, term?.foreground?.pid]);
-          setShared("chat.sessions", { ...(shared("chat.sessions") ?? {}), [key]: fork.file });
-          this.pinnedSession = fork.file;
-          this.pinnedAddress = this.term;
-          this.pending = []; this.streamLoop = null; this.stream = null; this.running = null;
-          this.chosen = null; this.cmdKey = null; this.forks = [];
-          this.start(fork.file, machineOf(this.term), "codex", cx); cx.notify();
-        }, t)))))
       .when(Boolean(this.searching) && (this.shown(), true), (el) => el.child(h_flex().id("search-bar").key_context("ChatSearch")
         .on_action("chat_search_close", (_e, cx) => this.closeSearch(cx))
         .h(38).px(12).gap(8).items_center().border_t(1).border_color(t.border).bg(t.background)
@@ -2235,6 +2232,14 @@ export default class Chat extends View {
     if (!this.dialog && !this.term) {
       return v_flex().id("root").size_full().bg(t.background).items_center().justify_center().text_color(t.dim)
         .child(`No agent here. Press ${shortcut("⇧N")} for a new chat.`);
+    }
+    if (!this.dialog && agentKind(term) === "codex" && !this.sessionResolved) {
+      return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).p(24).gap(12)
+        .child(this.locating ? "Identifying the conversation…" : "The current conversation could not be identified confidently.")
+        .child("In TUI, run /status and leave its result visible. Then return here and check again.")
+        .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t))
+        .child(this.button("identify-retry", "Check again", (_e, cx) => { this.sig = null; this.check(cx); cx.notify(); }, t))
+        .when(Boolean(this.error), el => el.child(String(this.error)));
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(15)
       .key_context(this.presentation ? "ChatRoot ChatPresentation" : "ChatRoot")

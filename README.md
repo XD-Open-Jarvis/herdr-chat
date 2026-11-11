@@ -174,3 +174,19 @@ To keep your own layout instead, point its pane header at `chat-pane` and its ta
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Codex conversation identification
+
+Chat checks the terminal's current screen against structured user/assistant
+messages in candidate logs. A match requires two distinct messages in screen
+order with evidence unique to one candidate. Inherited fork history is read at
+its recorded byte boundary and cannot distinguish parent and child by itself.
+Startup arguments, modification times and old manual selections are not treated
+as the current session identity.
+
+If identification is uncertain, Chat hides the transcript and asks you to open
+TUI, run `/status`, leave the status panel visible, and return to **Check again**.
+Chat reads the displayed Session ID; it never sends `/status` automatically or
+requires a Codex configuration change. Matching is conservative and bounded
+(40 same-directory candidates, 4 MiB of combined history per candidate), so long
+histories, insufficient visible text or unreadable logs can require this step.
