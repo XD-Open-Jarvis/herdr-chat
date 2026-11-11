@@ -1169,6 +1169,12 @@ export default class Chat extends View {
     const kind = agentKind(term);
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
+    const sessionKey = JSON.stringify([this.owner?.owner_tab, this.owner?.owner_pane, this.terminalId, term?.foreground?.pid]);
+    const selectedSession = (shared("chat.sessions") ?? {})[sessionKey];
+    if (kind === "codex" && selectedSession && selectedSession !== this.file) {
+      this.pinnedSession = selectedSession; this.pinnedAddress = term.address;
+      this.start(selectedSession, machineOf(term.address), kind, cx);
+    }
     const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
     this.ticks++;
     if (sig && !this.locating && (sig !== this.sig || this.ticks % 3 === 0 || !this.file)) {
@@ -1186,7 +1192,7 @@ export default class Chat extends View {
           }
           if (file && file !== this.file) this.start(file, machineOf(this.term), kind, cx);
           this.missing = !file && !this.file;
-          if (kind === "codex" && this.file && (!this.forkCheckedAt || Date.now() - this.forkCheckedAt > 15000)) {
+          if (kind === "codex" && (!this.forkCheckedAt || Date.now() - this.forkCheckedAt > 15000)) {
             this.forkCheckedAt = Date.now(); this.forks = await forkCandidates(this.file, term);
           }
         } catch (e) {
@@ -1895,9 +1901,11 @@ export default class Chat extends View {
 
   header(term, t) {
     return v_flex().flex_none()
-      .when(Boolean(this.forks?.length), el => el.child(h_flex().px(14).py(6).gap(8).items_center()
-        .child(div().text_size(12).text_color(t.muted).child("Fork detected · select the conversation shown in TUI"))
-        .children(this.forks.map(fork => this.button(`fork-${fork.id}`, `Switch to fork · ${fork.id.slice(-8)}`, (_e, cx) => {
+      .when(Boolean(this.forks?.length), el => el.child(h_flex().px(14).py(6).gap(8).items_center().overflow_x_scrollbar()
+        .child(div().text_size(12).text_color(t.muted).child("Select the conversation shown in TUI"))
+        .children(this.forks.map(fork => this.button(`fork-${fork.id}`, `${fork.timestamp.slice(0, 16)} · ${fork.id.slice(-8)}`, (_e, cx) => {
+          const key = JSON.stringify([this.owner?.owner_tab, this.owner?.owner_pane, this.terminalId, term?.foreground?.pid]);
+          setShared("chat.sessions", { ...(shared("chat.sessions") ?? {}), [key]: fork.file });
           this.pinnedSession = fork.file;
           this.pinnedAddress = this.term;
           this.pending = []; this.streamLoop = null; this.stream = null; this.running = null;

@@ -32,10 +32,7 @@ kids=$(pgrep -P "$1" | tr '\\n' ' ')
 grand=$(for k in $kids; do pgrep -P "$k"; done | tr '\\n' ' ')
 for p in "$1" $kids $grand; do
   { lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p'; ls -l "/proc/$p/fd" 2>/dev/null | sed 's/.* -> //'; } | grep '/sessions/.*rollout-.*\\.jsonl$'
-done | head -1 | grep . && exit 0
-find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' -mtime -2 2>/dev/null | xargs ls -t 2>/dev/null | while read -r f; do
-  head -c 20000 "$f" | grep -q "\\"cwd\\":\\"$2\\"" && { echo "$f"; break; }
-done`;
+done | sort -u | { files=$(cat); [ "$(printf '%s\\n' "$files" | grep -c .)" = 1 ] && printf '%s\\n' "$files"; }`;
 
 export async function locate(term, kind) {
   const pid = term?.foreground?.pid;
@@ -80,22 +77,18 @@ export class Tail {
 export async function forkCandidates(file, term) {
   const script = `
 import json,pathlib,sys
-parent=pathlib.Path(sys.argv[1])
-try:
-    meta=json.loads(parent.open().readline()).get("payload",{})
-except Exception:
-    print("[]");sys.exit()
+cwd=sys.argv[2]
 root=pathlib.Path.home()/".codex"/"sessions"
 found=[]
 for path in root.rglob("rollout-*.jsonl"):
     try:
         with path.open() as stream: m=json.loads(stream.readline()).get("payload",{})
-        if m.get("forked_from_id")==meta.get("id") and m.get("cwd")==meta.get("cwd") and m.get("originator")=="codex-tui":
+        if m.get("cwd")==cwd and m.get("originator")=="codex-tui":
             found.append({"file":str(path),"id":m["id"],"timestamp":m.get("timestamp","")})
     except Exception: pass
 print(json.dumps(sorted(found,key=lambda x:x["timestamp"],reverse=True)))
 `;
-  const result = await exec("python3", ["-c", script, file], { on: machineOf(term.address) });
+  const result = await exec("python3", ["-c", script, file ?? "", term.foreground?.cwd ?? ""], { on: machineOf(term.address) });
   if (result.code !== 0) return [];
   try { return JSON.parse(result.stdout); } catch { return []; }
 }
