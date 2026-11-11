@@ -51,7 +51,7 @@ function reconcile(paneList, color = "accent") {
     border: { width: 1, color: "border" }, focus: { width: 1, color }, lone: true,
   } } }] };
   const calls = [];
-  runInNewContext(findSource + framePrelude, {
+  runInNewContext(findSource + "function reconcileFrame(){" + framePrelude + "} reconcileFrame();", {
     spaces: () => [{ active: true, tabs: [{ id: "work", active: true }] }],
     findNode:()=>null,presentationPane:()=>null,panes: () => paneList, layout: () => tree,
     run: (command, args) => calls.push({ command, args }),
@@ -97,4 +97,19 @@ test('switching to another tab leaves local Chat mode without changing shared pa
  runInNewContext(findSource+'function renderFrame() {\n'+framePrelude+'\n}\nrenderFrame(); renderFrame();',context);
  assert.deepEqual(calls.map(c=>c.command),['layout.select']);
  assert.equal(calls[0].args.child,'main');
+});
+
+test("Chat is restored when returning to its tab and explicit TUI choice is retained",()=>{
+ let active="a";
+ const terminal={pane:"p",tab:"a",terminal:"t1"};
+ let tree={id:"conversation-view",active:"conversation-page",children:[{id:"conversation-chat",content:{props:{terminal:"t1",owner_tab:"a",owner_pane:"p"}}}]};
+ const calls=[];
+ const find=(n,id)=>n.id===id?n:(n.children??[]).map(x=>find(x,id)).find(Boolean);
+ const ctx={spaces:()=>[{active:true,tabs:[{id:active,active:true}]}],panes:()=>[terminal],layout:()=>tree,
+ findNode:find,presentationPane:meta=>meta.owner_tab==="a"?terminal:null,
+ viewLayout:(t,target,meta)=>({...t,active:"conversation-page"}),div:()=>({}),
+ run:(command,args)=>{calls.push(command);if(command==="layout.select")tree.active=args.child;else tree=args.layout;}};
+ const render=runInNewContext(findSource+"function frame(){"+framePrelude+"} frame;",ctx);
+ render();active="b";render();assert.equal(tree.active,"main");active="a";render();assert.equal(tree.active,"conversation-page");
+ tree.active="main";active="b";render();active="a";render();assert.equal(tree.active,"main");
 });
