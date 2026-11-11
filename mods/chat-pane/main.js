@@ -100,7 +100,7 @@ export default class Pane extends View {
     if (props()?.overlay) return this.question(t);
     const p = this.me();
     if (!p) return props()?.presentation ? div().size_full().child(div().px(14).py(10).cursor_pointer()
-      .on_click(() => run("layout.select", { stack: "conversation-view", child: "main" })).child("终端")) : div();
+      .on_click(() => run("layout.select", { stack: "conversation-view", child: "main" })).child("TUI")) : div();
     const pair = this.chatPair(p);
     if (pair) return this.conversationHeader(p, pair, t);
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
@@ -200,7 +200,7 @@ export default class Pane extends View {
         .child(this.button(t, `ph-z-${p.pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane: p.pane }))
         .child(this.closeButton(t, p)))
       .child(h_flex().flex_none().p(3).gap(2).rounded(9).bg(t.chrome)
-        .child(segment("chat", "对话")).child(segment("terminal", "终端")));
+        .child(segment("chat", "Chat")).child(segment("terminal", "TUI")));
   }
 
   splitButton(t, p, direction) {
