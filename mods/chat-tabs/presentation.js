@@ -34,6 +34,12 @@ export function viewLayout(tree, target, extra = {}) {
     page.children.find((child) => child.content?.mod === "chat-pane").content.props = props;
     stack.children.push(page);
   }
+  // Chat is a single full-size presentation of the same pane. Use its
+  // ordinary frame, never the split-pane focus highlight.
+  const frame = findNode(updated, "main")?.content?.pane;
+  page.background = frame?.background ?? "background";
+  page.border = { ...(frame?.border ?? { width: 1, color: "border" }) };
+  page.radius = frame?.radius ?? 10;
   stack.active = page.id;
   return updated;
 }
@@ -53,7 +59,10 @@ export async function openChat(target, extra = {}) {
   const current = layout();
   const next = viewLayout(current, target, extra);
   const page = activePage(next);
-  if (findNode(current, page.id))
+  const previous = findNode(current, page.id);
+  const sameFrame = previous && ["background", "border", "radius"].every(key =>
+    JSON.stringify(previous[key]) === JSON.stringify(page[key]));
+  if (sameFrame)
     await herdr("layout.select", { stack: "conversation-view", child: page.id });
   else
     await herdr("layout.set", { layout: next });

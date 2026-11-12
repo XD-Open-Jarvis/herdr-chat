@@ -90,3 +90,15 @@ test('each terminal retains stable block IDs and props across repeated Chat sele
  assert.equal(s.api.presentationVisible(s.tree,s.api.pageMeta(s.api.activePage(s.tree))),true);
  assert.equal(s.api.presentationVisible(s.tree,{owner_tab:'other',owner_pane:'other',terminal:'t14'}),false);
 });
+test('Chat frame matches the terminal ordinary border without its focus accent',()=>{
+ const s=setup();const frame=s.api.findNode(s.tree,'main').content.pane;
+ frame.border={width:2,color:'border'};frame.radius=12;frame.background='surface';frame.focus={width:2,color:'accent'};
+ const next=s.api.viewLayout(s.tree,target),page=s.api.activePage(next);
+ assert.deepEqual(JSON.parse(JSON.stringify(page.border)),frame.border);assert.equal(page.radius,12);assert.equal(page.background,'surface');assert.equal(page.focus,undefined);
+});
+test('existing retained Chat gets an updated terminal frame without changing its identity',async()=>{
+ const s=setup();await s.api.openChat(target);const id=s.api.activePage(s.tree).id;
+ await s.api.showTerminal(target);s.api.findNode(s.tree,'main').content.pane.radius=14;
+ await s.api.openChat(target);assert.equal(s.api.activePage(s.tree).id,id);assert.equal(s.api.activePage(s.tree).radius,14);
+ assert.equal(s.calls.at(-2).command,'layout.set');
+});

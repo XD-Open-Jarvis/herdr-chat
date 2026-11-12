@@ -157,7 +157,13 @@
                         }
                       }
                     }
-                  ]
+                  ],
+                  "background": "background",
+                  "border": {
+                    "width": 1,
+                    "color": "border"
+                  },
+                  "radius": 10
                 }
               ]
             },
