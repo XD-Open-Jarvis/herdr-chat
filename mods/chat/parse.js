@@ -16,7 +16,7 @@ export function hcMessage(text) {
 export function userAttachments(text) {
   const files = [];
   for (;;) {
-    const match = /^\s*(\\?\{[^\r\n]*?\\?\})/.exec(text);
+    const match = /^\s*((?:\\)*\{[^\r\n]*?(?:\\)*\})/.exec(text);
     if (!match) {
       // The composer sends cached attachment paths as shell-quoted tokens.
       // Recognize Herdr-managed file locations, never arbitrary prose paths.
@@ -28,8 +28,17 @@ export function userAttachments(text) {
       text = text.slice(token[0].length).trimStart();
       continue;
     }
-    let file;
-    try { file = JSON.parse(match[1].replace(/\\([{}])/g, "$1")); } catch { break; }
+    let file, record = match[1];
+    // Transport can escape braces only, or escape the complete record more
+    // than once. Always try valid JSON first so Windows paths and filenames
+    // retain their own JSON escapes.
+    for (let layer = 0; layer < 5 && !file; layer++) {
+      for (const candidate of [record, record.replace(/\\([{}])/g, "$1")]) {
+        try { file = JSON.parse(candidate); break; } catch {}
+      }
+      record = record.replace(/\\([\\{}"])/g, "$1");
+    }
+    if (!file) break;
     if (!file || typeof file.path !== "string" || !/^(?:\/|[A-Za-z]:[\\/])/.test(file.path)
       || !Number.isFinite(file.bytes) || file.bytes < 0
       || Object.keys(file).some(key => !["path", "bytes", "name", "mime", "type"].includes(key))) break;

@@ -21,11 +21,14 @@ export function compactSettings(entries) {
   }
   return result;
 }
+// GPUI truncates horizontal overflow but still honors embedded newlines.
+export const summaryLine = text => String(text ?? "").split(/\r?\n/).find(line => line.trim())?.trim() ?? "";
 export function toolSummary(items, running = false) {
   const active = running && items.find(item => item.result === null);
   if (active || items.length === 1) {
     const item = active || items[0];
-    return `${item.name}${item.summary ? " · " + item.summary : ""}`;
+    const summary = summaryLine(item.summary);
+    return `${item.name}${summary ? " · " + summary : ""}`;
   }
   const groups = new Map(), edited = new Set();
   for (const item of items) {

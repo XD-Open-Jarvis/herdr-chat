@@ -41,3 +41,13 @@ test('running tool summary shows current work and unknown tools retain their nam
  assert.equal(toolSummary(items,true),'Bash · npm test');
  assert.equal(toolSummary([{name:'custom_tool',result:'ok'},{name:'custom_tool',result:'ok'}]),'2 custom_tool');
 });
+test('collapsed single-tool summaries never expose multiline script bodies',()=>{
+ const script="python3 - <<'PY'\nfrom pathlib import Path\nfrom datetime import datetime\nprint('private detail')\nPY";
+ const label=toolSummary([{name:'Bash',summary:script,result:'ok'}]);
+ assert.equal(label,"Bash · python3 - <<'PY'");assert.ok(!label.includes('\n'));assert.ok(!label.includes('from pathlib'));
+ assert.equal(toolSummary([{name:'Bash',summary:script,result:null}],true),label);
+});
+test('tool row summary formatting keeps multiline content only in the original detail',async()=>{
+ const {summaryLine}=await load('display');const text='\n\r\n  first line\r\nsecond line';
+ assert.equal(summaryLine(text),'first line');assert.equal(text,'\n\r\n  first line\r\nsecond line');
+});

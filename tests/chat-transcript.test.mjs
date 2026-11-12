@@ -136,3 +136,26 @@ test('error events stay visible, duplicate reports are coalesced and a new task 
  t.feed(JSON.stringify({type:'event_msg',payload:{type:'task_started',turn_id:'two'}}));
  assert.equal(t.issue,null);assert.equal(t.entries.filter(e=>e.kind==='error').length,1);
 });
+test('attachment descriptors survive repeated transport escaping without leaking JSON into user text',()=>{
+ const file={bytes:94021,path:'/tmp/terminal-prompt.png'};
+ const escape=text=>text.replace(/[\\{}"]/g,char=>'\\'+char);
+ let record=JSON.stringify(file);
+ for(let layer=0;layer<4;layer++){
+  const entry=codex(record+' 这个终端提示没有展示')[0];
+  assert.equal(entry.text,'这个终端提示没有展示');assert.equal(entry.images.length,1);assert.equal(entry.images[0].path,file.path);
+  record=escape(record);
+ }
+});
+test('brace-only transport escaping leaves valid Windows path and quoted filename escapes intact',()=>{
+ const file={bytes:10,path:'C:\\Users\\test\\a"b.png'};
+ for(const record of [JSON.stringify(file),JSON.stringify(file).replace(/[{}]/g,char=>'\\'+char)]){
+  const entry=codex(record+' hello')[0];assert.equal(entry.text,'hello');assert.equal(entry.images[0].path,file.path);
+ }
+});
+test('multiple escaped attachments are consumed, but escaped non-attachment JSON stays ordinary text',()=>{
+ const escape=text=>text.replace(/[\\{}"]/g,char=>'\\'+char);
+ const first=escape(escape(JSON.stringify({bytes:1,path:'/tmp/a.png'})));
+ const second=escape(JSON.stringify({bytes:2,path:'/tmp/b.png'}));
+ const entry=codex(first+' '+second+' check both')[0];assert.equal(entry.text,'check both');assert.equal(entry.images.length,2);
+ const ordinary=escape(JSON.stringify({path:'/tmp/a.png',example:true}));assert.equal(codex(ordinary)[0].text,ordinary);
+});
