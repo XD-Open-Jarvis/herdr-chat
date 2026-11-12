@@ -1462,7 +1462,6 @@ export default class Chat extends View {
       .rounded(18).overflow_hidden()
       .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
         .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.text_color(t.foreground))
-        .tooltip(this.outboxExpanded ? "Collapse queued messages" : "Expand queued messages")
         .on_click((_e, cx) => { this.outboxExpanded = !this.outboxExpanded; this.outboxHovered = null; cx.notify(); })
         .child(`${this.outbox.items.length} queued`)
         .child(div().text_size(11).child(this.outboxExpanded ? "▴" : "▾")))
@@ -1503,9 +1502,8 @@ export default class Chat extends View {
                     .flex().items_center().justify_center().cursor_pointer().text_size(10).text_color(t.foreground)
                     .hover(style => style.border_color(t.accent).text_color(t.accent))
                     .on_click((_e, cx) => this.pumpOutbox(cx, item.id)).child("Instant")
-                    .when(unavailable, button => button.opacity(0.4))
-                    .tooltip(paused ? "Return to this session to send" : unavailable ? "Resolve the agent prompt before sending" : "Send this message now"))
-                  .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).text_color(t.muted).tooltip("Remove queued message")
+                    .when(unavailable, button => button.opacity(0.4)))
+                  .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).text_color(t.muted)
                     .on_click((_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }).child("×"))));
           }))))));
   }
@@ -2407,7 +2405,7 @@ export default class Chat extends View {
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)
           .text_color(stop ? t.accent_foreground : typed || this.dialog ? t.solid_foreground : t.dim)
           .hover((s) => s.opacity(0.85))
-          .tooltip(stop ? "Stop" : this.dialog ? "Start" : working ? "Queue message" : "Send")
+          .when(!working || stop || this.dialog, el => el.tooltip(stop ? "Stop" : this.dialog ? "Start" : "Send"))
           .on_click((_e, cx) => (stop ? hc(["interrupt", this.term]) : this.send(cx)))
           .child(stop ? div().size(12).flex_none().rounded(2).bg(t.accent_foreground) : "↑")));
     return v_flex().flex_none().bg(t.background).px(16).pb(14).gap(8)
