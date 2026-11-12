@@ -1962,7 +1962,7 @@ export default class Chat extends View {
         .when(Boolean(this.showModes), (el) => el.bg(t.hover))
         .text_color(risky ? t.blocked : this.showModes ? t.foreground : t.muted)
         .hover((s) => s.bg(t.hover).text_color(risky ? t.blocked : t.foreground))
-        .child(div().child(now?.label ?? "Permissions")).child(div().text_color(t.dim).text_size(10).child("⌄")))
+        .child(div().child(now?.label ?? "Permissions")).child(svg("mods/chat/icons/chevron-down.svg").size(16).flex_none().self_center().text_color(t.muted)))
       .content(menu);
   }
 
@@ -1975,7 +1975,7 @@ export default class Chat extends View {
     const label = h_flex().gap(5).items_center()
       .child(div().text_color(t.foreground).child(this.switching ? "Switching…" : modelName(cat?.models, model)))
       .when(Boolean(effort) && !this.switching, (el) => el.child(div().text_color(t.dim).child(effort)))
-      .child(div().text_color(t.dim).text_size(10).child("⌄"));
+      .child(svg("mods/chat/icons/chevron-down.svg").size(16).flex_none().self_center().text_color(t.muted));
     const efforts = cat?.models.find((m) => m.id === model)?.efforts ?? [];
     const pick = (m, e) => (_ev, cx) => { this.showModels = false; this.applyModel(m, e, cx); };
     const heading = (text) => div().px(10).pt(8).pb(4).text_size(11).font_semibold().text_color(t.dim).child(text);
@@ -2134,7 +2134,7 @@ export default class Chat extends View {
           .hover((s) => s.opacity(0.85))
           .tooltip(stop ? "Stop" : this.dialog ? "Start" : "Send")
           .on_click((_e, cx) => (stop ? hc(["interrupt", this.term]) : this.send(cx)))
-          .child(stop ? "■" : "↑")));
+          .child(stop ? div().size(12).flex_none().rounded(2).bg(t.accent_foreground) : "↑")));
     return v_flex().flex_none().bg(t.background).px(16).pb(14).gap(8)
       .when(working, (el) => el.child(h_flex().w_full().justify_center().child(h_flex().w_full().max_w(900).px(6).gap(8).items_center().text_size(12).text_color(t.muted)
         .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
