@@ -2022,10 +2022,10 @@ export default class Chat extends View {
 
   // Render terminal output as selectable literal text, without Markdown's
   // fenced-code frame/language badge. Long output expands explicitly.
-  plainOutput(id, text, t, error = false, framed = true) {
+  plainOutput(id, text, t, error = false, framed = true, scrollable = false) {
     const lines = text.split("\n"), long = lines.length > 12 || text.length > 900;
     const open = this.open.has(`output-${id}`);
-    const shown = long && !open ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
+    const shown = long && !open && !scrollable ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
     const escaped = shown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/\t/g, "    ");
     const short = !long && lines.length <= 2;
@@ -2036,7 +2036,7 @@ export default class Chat extends View {
         .child(TextView.html(id, `<pre>${escaped}</pre>`).selectable(true).text_color(error ? t.blocked : t.muted)
           .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
           .when(!framed, el => el.text_size(12).line_height("18px"))))
-      .when(long, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
+      .when(long && !scrollable, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
         .hover(style => style.text_color(t.foreground))
         .on_click((_event, cx) => { open ? this.open.delete(`output-${id}`) : this.open.add(`output-${id}`); cx.notify(); })
         .child(open ? "Show less" : "Show more")));
@@ -2219,8 +2219,11 @@ export default class Chat extends View {
     return v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8).rounded(12)
       .border_1().border_color(item.error ? t.blocked : t.input).bg(t.surface)
       .child(div().text_size(12).text_color(t.muted).child("Shell"))
-      .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false))
-      .when(Boolean(item.result?.trim()), el => el.child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false)))
+      .child(div().id(`${id}-input-scroll`).w_full().min_w(0).max_h(240).overflow_y_scrollbar()
+        .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false, true)))
+      .when(Boolean(item.result?.trim()), el => el.child(div().w_full().min_w(0).pt(8).border_t(1).border_color(t.border)
+        .child(div().id(`${id}-output-scroll`).w_full().min_w(0).max_h(320).overflow_y_scrollbar()
+          .child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false, true)))))
       .child(h_flex().justify_end().text_size(11.5).text_color(item.error ? t.blocked : t.dim)
         .child(item.error ? `✕ Failed${item.exitCode != null ? ` · exit ${item.exitCode}` : ""}`
           : running ? "Running…" : pendingOutput ? "Output pending" : item.result === null ? "Pending" : "✓ Success"));
@@ -2232,18 +2235,18 @@ export default class Chat extends View {
     const running = i.result === null && this.terminal()?.status === "working";
     return v_flex().w_full().min_w(0)
       .when(i.error, el => el.rounded(8).border_1().border_color(t.blocked))
-      .child(h_flex().id(id).px(4).py(3).gap(8).items_center().cursor_pointer()
-        .hover(style => style.bg(t.hover))
+      .child(h_flex().id(id).px(4).py(3).gap(8).items_center().cursor_pointer().text_color(t.muted)
+        .hover(style => i.name === "Bash" ? style.text_color(t.foreground) : style.bg(t.hover))
         .on_click((_event, cx) => { open ? this.open.delete(id) : this.open.add(id); cx.notify(); })
-        .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none().text_color(t.dim))
-        .child(div().flex_none().text_size(12.5).text_color(t.muted).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).tooltip(i.summary).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
+        .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none())
+        .child(div().flex_none().text_size(12.5).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).tooltip(i.summary).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
         .when(i.changes?.length === 1 && i.changes[0].added != null && !i.error, el => el
           .child(div().text_size(11.5).text_color(t.done).child(`+${i.changes[0].added}`))
           .child(div().text_size(11.5).text_color(t.ansi1).child(`−${i.changes[0].removed ?? 0}`)))
         .when(running, el => el.child(div().text_size(12).text_color(t.dim).frames(SPINNER, 90)))
         .when(!running && (i.error || i.result === null), el => el.child(div().text_size(11).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : "Pending")))
-        .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none().text_color(t.dim)))
+        .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none()))
       .when(open && i.name === "Bash", el => el.child(this.shellDetails(id, i, t, running)))
       .when(open && i.name !== "Bash" && i.input != null, el => el.child(v_flex().px(12).pb(10).gap(4)
         .child(div().text_size(11).text_color(t.dim).child("Input"))
