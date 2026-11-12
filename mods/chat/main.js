@@ -29,6 +29,7 @@ import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } f
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
+import { diffLines, diffGroups } from "./diff.js";
 import { compactSettings, toolSummary, summaryLine, commandPreview } from "./display.js";
 import { toolDetails, withChanges, changeOverview } from "./activity.js";
 import { ChatAttention } from "./attention.js";
@@ -2215,6 +2216,21 @@ export default class Chat extends View {
       .when(open, (el) => el.children((visible.length ? visible : described).map((i, n) => this.tool(e.key, i.id ?? n, i, t))));
   }
 
+  diffView(id, file, t) {
+    const lines = diffLines(file), expanded = this.open.has(`diff-more-${id}`);
+    const shown = expanded ? lines : lines.slice(0, 80);
+    const colors = { added: t.ansi2, removed: t.ansi1, hunk: t.ansi6, header: t.muted, context: t.foreground };
+    const escape = text => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\t/g, "    ");
+    return v_flex().w_full().min_w(0).gap(0).py(6).rounded(8).border_1().border_color(t.border).bg(t.background)
+      .children(diffGroups(shown).map((group, index) => div().w_full().min_w(0).px(10)
+        .child(TextView.html(`diff-${id}-${index}`, `<pre>${escape(group.text)}</pre>`).selectable(true)
+          .text_size(12).line_height("18px").text_color(colors[group.kind])
+          .when(Boolean(settings().font_family), el => el.font_family(settings().font_family)))))
+      .when(lines.length > 80, el => el.child(div().id(`diff-expand-${id}`).px(10).py(5).text_size(11.5).text_color(t.muted).cursor_pointer()
+        .hover(style => style.text_color(t.foreground)).on_click((_event, cx) => this.toggleCard(`diff-more-${id}`, cx))
+        .child(expanded ? "Show less" : `Show more (${lines.length - 80} lines)`)));
+  }
+
   changeBlock(entry, t) {
     const overview = changeOverview(entry.files);
     const listKey = `file-list-${entry.key}`, diffKey = `file-diffs-${entry.key}`;
@@ -2225,7 +2241,7 @@ export default class Chat extends View {
       .when(removed != null, el => el.child(div().text_color(t.ansi1).child(`−${removed}`)));
     const details = (file, id) => v_flex().px(12).pb(10).gap(4)
       .when(Boolean(file.oldPath), row => row.child(div().text_size(11).text_color(t.dim).child(`Moved from ${file.oldPath}`)))
-      .child(this.plainOutput(`diff-content-${id}`, file.diff || `${file.operation} ${file.path}`, t, false, false));
+      .child(this.diffView(`diff-content-${id}`, file, t));
     return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(t.input).bg(t.background).overflow_hidden()
       .child(h_flex().w_full().px(12).py(12).gap(10).items_center().bg(t.surface)
         .child(div().size(36).flex_none().rounded(10).bg(t.chrome).flex().items_center().justify_center()
