@@ -1477,12 +1477,11 @@ export default class Chat extends View {
               this.outboxHeight = size.height; cx.notify();
             }
           })
-          .children(this.outbox.items.map((item, index) => {
+          .children(this.outbox.items.map((item) => {
             const paused = context.scope !== item.scope;
             const unavailable = paused || !["idle", "done", "working"].includes(context.status);
             const hovered = this.outboxHovered === item.id;
             return h_flex().id(`outbox-${item.id}`).w_full().min_h(44).flex_none().relative().px(12).py(10).gap(10).items_center()
-              .when(index > 0, row => row.child(div().absolute().top(0).left(12).right(12).h(1).bg(t.border)))
               .on_hover((on, cx) => {
                 if (on) this.outboxHovered = item.id;
                 else if (this.outboxHovered === item.id) this.outboxHovered = null;
