@@ -2063,6 +2063,12 @@ export default class Chat extends View {
 
   // Render terminal output as selectable literal text, without Markdown's
   // fenced-code frame/language badge. Long output expands explicitly.
+  toggleCard(key, cx, open = this.open.has(key)) {
+    open ? this.open.delete(key) : this.open.add(key);
+    this.anchorCard = true;
+    cx.notify();
+  }
+
   plainOutput(id, text, t, error = false, framed = true) {
     const lines = text.split("\n"), long = lines.length > 12 || text.length > 900;
     const open = this.open.has(`output-${id}`);
@@ -2080,7 +2086,7 @@ export default class Chat extends View {
           .when(!framed, el => el.text_size(12).line_height("18px"))))
       .when(long, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
         .hover(style => style.text_color(t.foreground))
-        .on_click((_event, cx) => { open ? this.open.delete(`output-${id}`) : this.open.add(`output-${id}`); cx.notify(); })
+        .on_click((_event, cx) => { this.toggleCard(`output-${id}`, cx, open); })
         .child(open ? "Show less" : "Show more")));
   }
 
@@ -2199,7 +2205,7 @@ export default class Chat extends View {
     return v_flex().w_full().gap(6)
       .child(h_flex().id(`tg-${e.key}`).gap(6).items_center().cursor_pointer().text_size(13).text_color(t.dim)
         .hover((s) => s.text_color(t.muted))
-        .on_click((_ev, cx) => { open ? this.open.delete(e.key) : this.open.add(e.key); cx.notify(); })
+        .on_click((_ev, cx) => { this.toggleCard(e.key, cx, open); })
         .child(svg(`mods/chat/icons/${commands ? "terminal" : "edit"}.svg`).size(14).flex_none())
         .child(div().min_w(0).truncate().child(label))
         .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none())
@@ -2230,7 +2236,7 @@ export default class Chat extends View {
             : `Edited ${entry.files.length} files`))
           .child(stats(overview.added, overview.removed).tooltip("Recorded additions and deletions in this turn")))
         .child(this.button(`diff-toggle-${entry.key}`, allDiffs ? "Hide changes" : "View changes", (_e, cx) => {
-          allDiffs ? this.open.delete(diffKey) : this.open.add(diffKey); cx.notify();
+          this.toggleCard(diffKey, cx, allDiffs);
         }, t).bg(t.background).border_1().border_color(t.input).rounded(10).py(6)))
       .when(entry.files.length > 1, el => el.child(v_flex().border_t(1).border_color(t.border)
         .children(files.map((file, index) => {
@@ -2239,7 +2245,7 @@ export default class Chat extends View {
           return v_flex().w_full().min_w(0)
             .child(h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center().cursor_pointer()
               .hover(style => style.bg(t.hover))
-              .on_click((_e, cx) => { this.open.has(id) ? this.open.delete(id) : this.open.add(id); cx.notify(); })
+              .on_click((_e, cx) => { this.toggleCard(id, cx); })
               .child(h_flex().flex_1().min_w(0).text_size(13).tooltip(file.path)
                 .when(slash >= 0, row => row.child(div().flex_none().text_color(t.muted).child(label.slice(0, slash + 1))))
                 .child(div().min_w(0).truncate().child(label.slice(slash + 1))))
@@ -2250,7 +2256,7 @@ export default class Chat extends View {
       .when(entry.files.length > 3 && !allDiffs, el => el.child(h_flex().id(`more-${entry.key}`)
         .px(12).py(9).gap(8).items_center().border_t(1).border_color(t.border).bg(t.surface).cursor_pointer()
         .hover(style => style.bg(t.hover)).text_size(12.5)
-        .on_click((_e, cx) => { expanded ? this.open.delete(listKey) : this.open.add(listKey); cx.notify(); })
+        .on_click((_e, cx) => { this.toggleCard(listKey, cx, expanded); })
         .child(expanded ? "Show fewer files" : `Show ${entry.files.length - 3} more ${entry.files.length - 3 === 1 ? "file" : "files"}`)
         .child(div().child(expanded ? "▴" : "▾"))));
   }
@@ -2277,7 +2283,7 @@ export default class Chat extends View {
       .when(i.error, el => el.rounded(8).border_1().border_color(t.blocked))
       .child(h_flex().id(id).px(4).py(3).gap(8).items_center().cursor_pointer().text_color(t.muted)
         .hover(style => i.name === "Bash" ? style.text_color(t.foreground) : style.bg(t.hover))
-        .on_click((_event, cx) => { open ? this.open.delete(id) : this.open.add(id); cx.notify(); })
+        .on_click((_event, cx) => { this.toggleCard(id, cx, open); })
         .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none())
         .child(div().flex_none().text_size(12.5).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
@@ -2297,7 +2303,7 @@ export default class Chat extends View {
         .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
       .when(open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
         .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
-          this.open.has(`raw-${id}`) ? this.open.delete(`raw-${id}`) : this.open.add(`raw-${id}`); cx.notify();
+          this.toggleCard(`raw-${id}`, cx);
         }, t).w_auto().self_start().bg(t.background).text_color(t.dim).px(0).py(2))
         .when(this.open.has(`raw-${id}`), row => row.child(this.plainOutput(`${id}-raw`,
           typeof i.input === "string" ? i.input : JSON.stringify(i.input, null, 2), t, false, false)))))
@@ -2444,14 +2450,16 @@ export default class Chat extends View {
     this.settle();
     const { start, ents } = this.shown();
     const shown = ents.slice(start);
+    const anchorCard = this.anchorCard;
+    this.anchorCard = false;
     // The conversation sits in a centered column as wide as the message card.
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
-    const content = v_flex().id("content").absolute().left(0).right(0).bottom(-this.off).px(side).py(24).gap(0)
+    const content = v_flex().id("content").absolute().left(0).right(0).top(this.contentH > 0 ? this.viewH - this.contentH + this.off : 0).px(side).py(24).gap(0)
       .on_size_change((size, cx) => {
-        // Scrolled up, what's on screen stays put whatever changes below it:
-        // new messages, the live card, a streaming reply, a card or an image
-        // loading. Only "Show earlier" adds above, and must not move it.
-        if (this.off > 0 && this.contentH > 0 && !this.earlier) this.off += size.height - this.contentH;
+        if (size.height === this.contentH) return;
+        // Position from the measured top, not the new bottom: height changes
+        // must not move the whole page for a frame before this correction.
+        if ((this.off > 0 || anchorCard) && this.contentH > 0 && !this.earlier) this.off += size.height - this.contentH;
         this.earlier = false;
         this.grew = false;
         this.contentH = size.height;
@@ -2477,7 +2485,10 @@ export default class Chat extends View {
 ;
 
     const scroll = div().id("scroll").relative().flex_1().min_h(0).overflow_hidden()
-      .on_size_change((size, cx) => { this.viewH = size.height; this.width = size.width; this.clamp(); cx.notify(); })
+      .on_size_change((size, cx) => {
+        if (this.viewH === size.height && this.width === size.width) return;
+        this.viewH = size.height; this.width = size.width; this.clamp(); cx.notify();
+      })
       .on_scroll_wheel((e, cx) => { this.off += e.delta.y; this.clamp(); cx.notify(); })
       .child(content);
 
