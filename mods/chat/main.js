@@ -2022,10 +2022,10 @@ export default class Chat extends View {
 
   // Render terminal output as selectable literal text, without Markdown's
   // fenced-code frame/language badge. Long output expands explicitly.
-  plainOutput(id, text, t, error = false, framed = true, scrollable = false) {
+  plainOutput(id, text, t, error = false, framed = true) {
     const lines = text.split("\n"), long = lines.length > 12 || text.length > 900;
     const open = this.open.has(`output-${id}`);
-    const shown = long && !open && !scrollable ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
+    const shown = long && !open ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
     const escaped = shown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/\t/g, "    ");
     const short = !long && lines.length <= 2;
@@ -2036,7 +2036,7 @@ export default class Chat extends View {
         .child(TextView.html(id, `<pre>${escaped}</pre>`).selectable(true).text_color(error ? t.blocked : t.muted)
           .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
           .when(!framed, el => el.text_size(12).line_height("18px"))))
-      .when(long && !scrollable, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
+      .when(long, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
         .hover(style => style.text_color(t.foreground))
         .on_click((_event, cx) => { open ? this.open.delete(`output-${id}`) : this.open.add(`output-${id}`); cx.notify(); })
         .child(open ? "Show less" : "Show more")));
@@ -2220,10 +2220,10 @@ export default class Chat extends View {
       .border_1().border_color(item.error ? t.blocked : t.input).bg(t.surface)
       .child(div().text_size(12).text_color(t.muted).child("Shell"))
       .child(div().id(`${id}-input-scroll`).w_full().min_w(0).max_h(240).overflow_y_scrollbar()
-        .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false, true)))
+        .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false)))
       .when(Boolean(item.result?.trim()), el => el.child(div().w_full().min_w(0).pt(8).border_t(1).border_color(t.border)
         .child(div().id(`${id}-output-scroll`).w_full().min_w(0).max_h(320).overflow_y_scrollbar()
-          .child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false, true)))))
+          .child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false)))))
       .child(h_flex().justify_end().text_size(11.5).text_color(item.error ? t.blocked : t.dim)
         .child(item.error ? `✕ Failed${item.exitCode != null ? ` · exit ${item.exitCode}` : ""}`
           : running ? "Running…" : pendingOutput ? "Output pending" : item.result === null ? "Pending" : "✓ Success"));
