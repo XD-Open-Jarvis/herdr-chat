@@ -1458,7 +1458,7 @@ export default class Chat extends View {
     const height = Math.min(240, this.outboxHeight ?? this.outbox.items.length * 80);
     const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
     return h_flex().w_full().justify_center().child(v_flex().id("outbox").w_full().max_w(900)
-      .rounded(12).overflow_hidden()
+      .rounded(18).overflow_hidden()
       .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
         .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.text_color(t.foreground))
         .tooltip(this.outboxExpanded ? "Collapse queued messages" : "Expand queued messages")
@@ -1481,8 +1481,8 @@ export default class Chat extends View {
             const paused = context.scope !== item.scope;
             const unavailable = paused || !["idle", "done", "working"].includes(context.status);
             const hovered = this.outboxHovered === item.id;
-            return h_flex().id(`outbox-${item.id}`).w_full().flex_none().px(12).py(10).gap(10).items_center()
-              .when(index > 0, row => row.border_t(1).border_color(t.border))
+            return h_flex().id(`outbox-${item.id}`).w_full().flex_none().relative().px(12).py(10).gap(10).items_center()
+              .when(index > 0, row => row.child(div().absolute().top(0).left(12).right(12).h(1).bg(t.border)))
               .on_hover((on, cx) => {
                 if (on) this.outboxHovered = item.id;
                 else if (this.outboxHovered === item.id) this.outboxHovered = null;
@@ -1499,7 +1499,7 @@ export default class Chat extends View {
               // Reserve the action gutter so hover never reflows the message.
               .child(h_flex().w(90).flex_none().gap(4).items_center().justify_end()
                 .when(hovered && item.state !== "sending", row => row
-                  .child(div().id(`outbox-send-${item.id}`).flex_none().px(6).py(2).rounded(6).border_1().border_color(t.input)
+                  .child(div().id(`outbox-send-${item.id}`).flex_none().px(8).py(0).rounded_full().border_1().border_color(t.input)
                     .cursor_pointer().text_size(11).text_color(t.foreground)
                     .hover(style => style.border_color(t.accent).text_color(t.accent))
                     .on_click((_e, cx) => this.pumpOutbox(cx, item.id)).child("Instant")
