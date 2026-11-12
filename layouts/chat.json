@@ -158,7 +158,7 @@
                       }
                     }
                   ],
-                  "background": "background",
+                  "background": "#00000000",
                   "border": {
                     "width": 1,
                     "color": "border"

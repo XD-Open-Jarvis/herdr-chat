@@ -179,7 +179,7 @@ export default class Pane extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); this.selectView(pair, mode, cx); }).child(label);
     return h_flex().id(`conversation-header-${p.pane}`).size_full().px(14).gap(10).items_center()
-      .bg(t.background).text_size(13)
+      .bg(t.background).rounded_t(9).overflow_hidden().text_size(13)
       .on_hover((on, cx) => { this.hovered = on; cx.notify(); })
       .on_click(() => { if (!chatMode) run("pane.focus", { pane: p.pane }); })
       .child(div().flex_none().max_w(150).truncate().text_color(t.muted).child(space?.name ?? "herdr"))

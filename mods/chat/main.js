@@ -2795,7 +2795,7 @@ export default class Chat extends View {
           .child("Run /status in TUI, leave the result visible, then return and check again."))
         .when(Boolean(this.error), el => el.child(div().text_size(12).text_color(t.dim).child(String(this.error))));
     }
-    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(14)
+    return v_flex().id("root").size_full().bg(t.background).rounded_b(9).overflow_hidden().text_color(t.foreground).text_size(14)
       .key_context(this.presentation ? "ChatRoot ChatPresentation" : "ChatRoot")
       .on_action("chat_no_split", (_e, cx) => cx.stop_propagation())
       .on_action("chat_search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))
