@@ -2293,7 +2293,8 @@ export default class Chat extends View {
       .when(added!=null,el=>el.child(div().text_color(t.done).child(`+${added}`)))
       .when(removed!=null,el=>el.child(div().text_color(t.ansi1).child(`−${removed}`)));
     const title = div().id(`preview-change-${entry.key}`).w_auto().self_start().flex_none().truncate().text_size(14).font_semibold().cursor_pointer()
-      .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx))
+      .when(entry.files.length===1,el=>el.hover(style=>style.text_color(t.accent)))
+      .on_click((_event,cx)=>this.openChanges(entry,cx))
       .child(entry.files.length===1?`${entry.files[0].operation==='delete'?'Deleted':entry.files[0].operation==='add'?'Added':'Edited'} ${overview.labels[0]}`:`Edited ${entry.files.length} files`);
     const chrome = /^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(t.chrome) ? `${t.chrome.slice(0,7)}99` : t.chrome;
     let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center()
