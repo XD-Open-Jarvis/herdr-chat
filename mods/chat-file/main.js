@@ -1,6 +1,6 @@
 // A file from the chat's /memory, /config and /hooks, opened to edit: a
 // dialog with the file, Save (⌘S) and Close. Props: { file, title, overlay }.
-import { View, div, image } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { props, theme, settings, readTextFile, writeTextFile, closeOverlay, exec } from "herdr";
 
@@ -90,6 +90,7 @@ export default class ChatFile extends View {
       .hover(s => s.bg(t.hover)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); action(cx); }).child(text);
     return v_flex().id("image-window").size_full().bg(t.background).text_color(t.foreground)
+      .on_mouse_down_out((_event, cx) => { cx.stop_propagation(); closeOverlay(p.overlay); })
       .child(h_flex().h(40).px(14).gap(4).items_center().flex_none()
         .child(div().flex_1().min_w(0).truncate().text_size(13).child(p.title ?? "Image"))
         .child(button("close-image", "×", "Close", () => closeOverlay(p.overlay))))
@@ -129,8 +130,7 @@ export default class ChatFile extends View {
         .child(button("image-minus", "−", "Zoom out", cx => this.zoomImage(scale / 1.25, cx)))
         .child(div().w(48).h(28).flex_none().flex().items_center().justify_center().text_size(11.5).text_color(t.muted).child(`${Math.round(scale * 100)}%`))
         .child(button("image-plus", "+", "Zoom in", cx => this.zoomImage(scale * 1.25, cx)))
-        .child(button("image-original", "100%", "Actual size", cx => this.zoomImage(1, cx)))
-        .child(button("image-fit", "Fit", "Fit to window", cx => {
+        .child(button("image-fit", svg("mods/chat-file/fit.svg").size(16), "Fit to window", cx => {
           this.imageScale = null; this.imageOffset = { x: 0, y: 0 }; cx.notify();
         }))
         ));
