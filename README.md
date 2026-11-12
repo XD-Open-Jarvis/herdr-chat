@@ -190,3 +190,11 @@ Chat reads the displayed Session ID; it never sends `/status` automatically or
 requires a Codex configuration change. Matching is conservative and bounded
 (40 same-directory candidates, 4 MiB of combined history per candidate), so long
 histories, insufficient visible text or unreadable logs can require this step.
+
+Once verified, a Codex binding is persisted for its owning tab/pane/terminal
+and checked against the foreground PID plus process start time. A later screen
+with insufficient matching text does not revoke it. Mod/app reloads restore a
+binding only after verifying that process identity. Explicit new session
+identity replaces it; a displayed status for an unavailable session invalidates
+it. In-place session changes still require new identity evidence: process
+continuity alone cannot prove that no external `/fork` or `/resume` occurred.

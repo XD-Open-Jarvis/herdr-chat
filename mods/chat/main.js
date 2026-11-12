@@ -18,6 +18,7 @@ import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
 import { resolveSession } from "./session.js";
+import { bindingKey, chooseBinding } from "./binding.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
 import { emojify, emojiMatches } from "./emoji.js";
@@ -1173,6 +1174,8 @@ export default class Chat extends View {
     if (this.sourceAddress !== identitySource) {
       this.sourceAddress = identitySource;
       this.sessionResolved = false;
+      this.binding = null;
+      this.bindingEpoch = (this.bindingEpoch ?? 0) + 1;
       this.gen++;
       this.file = null;
       this.t = null;
@@ -1188,17 +1191,41 @@ export default class Chat extends View {
     this.ticks++;
     if (sig && !this.locating && (sig !== this.sig || this.ticks % 3 === 0 || !this.file)) {
       this.locating = true;
+      const epoch = this.bindingEpoch;
       cx.spawn(async (cx) => {
         try {
           let file = null;
           try { file = await locate(term, kind); }
           catch (error) { if (kind !== "codex") throw error; }
           if (kind === "codex") {
+            // PID alone can be reused after an exit/reboot. Match its start
+            // time too before restoring a binding after mod/app reload.
+            const started = await exec("ps", ["-p", String(term.foreground.pid), "-o", "lstart="], { on: machineOf(term.address) });
+            if (started.code !== 0 || !started.stdout.trim()) throw new Error("Could not verify the Codex process");
+            const process = `${term.foreground.pid}:${started.stdout.trim()}`;
+            const key = bindingKey(this.owner, this.terminalId);
+            const saved = key ? (shared("chat.bindings") ?? {})[key] : null;
+            const previous = this.binding?.process === process ? this.binding : saved?.process === process ? saved : null;
+            if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+            this.binding = previous;
+            if (previous) {
+              this.sessionResolved = true;
+              if (previous.file !== this.file) this.start(previous.file, machineOf(term.address), kind, cx);
+              cx.notify();
+            }
             const screen = await hc(["read", term.address]);
             const result = await resolveSession(term, screen.stdout, file);
-            file = result.file;
+            if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+            const next = chooseBinding(previous, result, process);
+            this.binding = next;
+            file = next?.file ?? null;
+            if (key && JSON.stringify(saved ?? null) !== JSON.stringify(next)) {
+              const records = { ...(shared("chat.bindings") ?? {}) };
+              if (next) records[key] = next; else delete records[key];
+              setShared("chat.bindings", records);
+            }
           }
-          if (`${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+          if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
           this.sig = sig;
           this.sessionResolved = Boolean(file);
           this.error = null;
@@ -1209,8 +1236,10 @@ export default class Chat extends View {
           if (file && file !== this.file) this.start(file, machineOf(this.term), kind, cx);
           this.missing = !file && !this.file;
         } catch (e) {
-          if (`${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
-          if (kind === "codex") {
+          if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+          // A transient read/probe failure does not invalidate a verified
+          // binding in this live process. New instances wait for verification.
+          if (kind === "codex" && !this.binding) {
             this.sessionResolved = false;
             this.gen++; this.file = null; this.t = null;
             this.streamLoop = null; this.stream = null; this.running = null;
@@ -1494,6 +1523,15 @@ export default class Chat extends View {
   }
 
   async deliver(text, files, cx) {
+    if (agentKind(this.terminal()) === "codex" && /^\/(?:resume|fork|new|clear)(?:\s|$)/.test(text)) {
+      const key = bindingKey(this.owner, this.terminalId);
+      const records = { ...(shared("chat.bindings") ?? {}) };
+      if (key) { delete records[key]; setShared("chat.bindings", records); }
+      this.binding = null; this.sessionResolved = false;
+      this.bindingEpoch = (this.bindingEpoch ?? 0) + 1;
+      this.gen++; this.file = null; this.t = null; this.sig = null;
+      this.streamLoop = null; this.stream = null; this.running = null;
+    }
     const paths = [];
     for (const f of files) {
       // An agent on another machine needs the file there.
