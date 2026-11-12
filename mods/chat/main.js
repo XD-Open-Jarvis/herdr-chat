@@ -1935,7 +1935,7 @@ export default class Chat extends View {
               .child(div().truncate().text_size(12).child(file.name))
               .when(Number.isFinite(file.bytes), el => el.child(div().text_size(10.5).text_color(t.dim)
                 .child(file.bytes < 1024 ? `${file.bytes} B` : `${Math.round(file.bytes / 1024)} KB`))))))))
-        .when(Boolean(e.text), el => el.child(v_flex().w_auto().max_w(max).min_w(0).flex_none().px(14).py(10).rounded(14).bg(t.raised).text_size(14).line_height("22px")
+        .when(Boolean(e.text), el => el.child(v_flex().w_auto().max_w(max).min_w(0).flex_none().px(14).py(10).rounded(14).bg(settings().dark ? "#45375e" : "#ede5fa").text_size(14).line_height("22px")
           .child(this.markdown(e.key, emojify(e.text)))))
         .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
