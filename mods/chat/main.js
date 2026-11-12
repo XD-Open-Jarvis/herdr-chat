@@ -1441,7 +1441,7 @@ export default class Chat extends View {
       try {
         const ok = await this.deliver(item.text, item.paths, cx, {
           target, valid: () => this.term === target && this.queueContext().scope === item.scope,
-          idleOnly: !id, steer: Boolean(id),
+          idleOnly: !id && context.status === "idle", steer: Boolean(id),
         });
         if (!ok) error = this.error || "Message was not sent.";
       } catch (e) { error = String(e?.message ?? e); }
@@ -1458,14 +1458,14 @@ export default class Chat extends View {
     const height = Math.min(240, this.outboxHeight ?? this.outbox.items.length * 80);
     const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
     return h_flex().w_full().justify_center().child(v_flex().id("outbox").w_full().max_w(900)
-      .rounded(12).border_1().border_color(t.border).bg(t.surface).overflow_hidden()
+      .rounded(12).overflow_hidden()
       .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
-        .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.bg(t.hover))
+        .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.text_color(t.foreground))
         .tooltip(this.outboxExpanded ? "Collapse queued messages" : "Expand queued messages")
         .on_click((_e, cx) => { this.outboxExpanded = !this.outboxExpanded; this.outboxHovered = null; cx.notify(); })
         .child(`${this.outbox.items.length} queued`)
         .child(div().text_size(11).child(this.outboxExpanded ? "▴" : "▾")))
-      .when(Boolean(this.outboxExpanded), el => el.child(div().id("outbox-scroll").w_full()
+      .when(Boolean(this.outboxExpanded), el => el.border_1().border_color(t.input).child(div().id("outbox-scroll").w_full()
         .h(height).flex_none().relative().overflow_hidden().border_t(1).border_color(t.border)
         .on_scroll_wheel((e, cx) => {
           this.outboxOffset = Math.max(0, Math.min(offset - e.delta.y, (this.outboxHeight ?? height) - height));
@@ -1499,7 +1499,10 @@ export default class Chat extends View {
               // Reserve the action gutter so hover never reflows the message.
               .child(h_flex().w(90).flex_none().gap(4).items_center().justify_end()
                 .when(hovered && item.state !== "sending", row => row
-                  .child(this.button(`outbox-send-${item.id}`, "Instant", (_e, cx) => this.pumpOutbox(cx, item.id), t)
+                  .child(div().id(`outbox-send-${item.id}`).flex_none().px(6).py(2).rounded(6).border_1().border_color(t.input)
+                    .cursor_pointer().text_size(11).text_color(t.foreground)
+                    .hover(style => style.border_color(t.accent).text_color(t.accent))
+                    .on_click((_e, cx) => this.pumpOutbox(cx, item.id)).child("Instant")
                     .when(unavailable, button => button.opacity(0.4))
                     .tooltip(paused ? "Return to this session to send" : unavailable ? "Resolve the agent prompt before sending" : "Send this message now"))
                   .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).text_color(t.muted).tooltip("Remove queued message")
