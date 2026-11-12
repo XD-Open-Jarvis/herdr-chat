@@ -2030,6 +2030,7 @@ export default class Chat extends View {
       .replace(/\t/g, "    ");
     const short = !long && lines.length <= 2;
     return v_flex().w_full().min_w(0).gap(4)
+      .when(maxHeight != null, el => el.id(`${id}-region`).on_scroll_wheel((_event, cx) => cx.stop_propagation()))
       .child(div().w_full().min_w(0)
         .when(maxHeight != null, el => el.id(`${id}-scroll`).max_h(maxHeight).overflow_y_scrollbar())
         .text_size(!framed ? 12 : short ? 12.5 : 11.5).text_color(error ? t.blocked : t.muted)
@@ -2221,7 +2222,7 @@ export default class Chat extends View {
     return v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8).rounded(12)
       .border_1().border_color(item.error ? t.blocked : t.input).bg(t.surface)
       .child(div().text_size(12).text_color(t.muted).child("Shell"))
-      .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false, 240))
+      .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false, 120))
       .when(Boolean(item.result?.trim()), el => el.child(div().w_full().min_w(0).pt(8).border_t(1).border_color(t.border)
         .child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false, 320))))
       .child(h_flex().justify_end().text_size(11.5).text_color(item.error ? t.blocked : t.dim)
