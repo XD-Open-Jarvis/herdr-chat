@@ -2000,10 +2000,10 @@ export default class Chat extends View {
   openFilePreview(url, cx, change = null) {
     const pane = this.myPane(), term = this.terminal();
     const key = previewKey(pane);
-    const target = fileLink(url, term?.foreground?.cwd ?? term?.cwd);
+    const target = fileLink(url, term?.foreground?.cwd ?? term?.cwd ?? pane?.cwd, Boolean(change));
     if (!target || !key) { if (!change) cx.open_url(url); return; }
     const pages = shared("chat.preview") ?? {};
-    setShared("chat.preview", {...pages, [key]: {...target, on: machineOf(term.address), change,
+    setShared("chat.preview", {...pages, [key]: {...target, on: machineOf(pane.terminal), change,
       mode: change ? "diff" : /\.(md|markdown|mdown)$/i.test(target.file) ? "preview" : "source", revision: Date.now()}});
     cx.spawn(async () => {
       try {
@@ -2012,7 +2012,6 @@ export default class Chat extends View {
         if (!find(current, "chat-preview")) await herdr("layout.set", {layout: previewLayout(current)});
         else {
           await herdr("layout.select", {stack: "panel-body", child: "chat-preview"});
-          if (find(current, "panel")?.hidden) await herdr("layout.resize", {id: "panel", px: 520});
           await herdr("layout.show", {id: "panel"});
         }
       }

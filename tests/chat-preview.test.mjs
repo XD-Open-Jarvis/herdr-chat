@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+import {runInNewContext} from 'node:vm';
 const source=readFileSync(new URL('../mods/chat/preview.js',import.meta.url),'utf8');
 const {fileLink,previewKey,previewPane,previewLayout}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 test('file links resolve relative to the owning terminal directory and retain line references',()=>{
@@ -35,4 +36,47 @@ test('adding the sidebar preview changes only the personal layout and preserves 
 test('the isolated preview mod ships the same path and diff helpers as chat',()=>{
  assert.equal(readFileSync(new URL('../mods/chat-preview/preview.js',import.meta.url),'utf8'),source);
  assert.equal(readFileSync(new URL('../mods/chat-preview/diff.js',import.meta.url),'utf8'),readFileSync(new URL('../mods/chat/diff.js',import.meta.url),'utf8'));
+});
+test('Markdown fragments and queries do not become part of the disk filename',()=>{
+ assert.deepEqual(fileLink('docs/setup.md#configuration','/project'),{file:'/project/docs/setup.md',line:null});
+ assert.deepEqual(fileLink('README.md?raw=1#intro','/project'),{file:'/project/README.md',line:null});
+ assert.deepEqual(fileLink('docs/a.ts?raw=1#L12-L20','/project'),{file:'/project/docs/a.ts',line:12});
+ assert.deepEqual(fileLink('file:///repo/a%23b%3Fc.md#intro','/other'),{file:'/repo/a#b?c.md',line:null});
+ assert.deepEqual(fileLink('/repo/a#b?c.md','/other',true),{file:'/repo/a#b?c.md',line:null});
+});
+test('opening an existing sidebar preserves its saved pixel or proportional width',()=>{
+ for(const size of [{px:666},{weight:2}]){
+  const tree={id:'panel',size,hidden:true,children:[{id:'panel-body',children:[]}]};
+  assert.deepEqual(previewLayout(tree).size,size);
+ }
+ assert.equal(previewLayout({id:'panel',children:[{id:'panel-body',children:[]}]}).size.px,520);
+});
+
+function previewView(terminal, pane, tree) {
+ const calls=[],tasks=[];let saved;
+ const main=readFileSync(new URL('../mods/chat/main.js',import.meta.url),'utf8').replace(/^import[\s\S]*?;\n/gm,'').replace('export default class Chat','class Chat');
+ const Chat=runInNewContext(main+'\nChat',{View:class{},appWindow:()=>({platform:'macos'}),fileLink,previewKey,previewLayout,
+  machineOf:address=>address?.includes('/')?address.split('/')[0]:null,
+  shared:()=>({}),setShared:(_key,value)=>{saved=value;},layout:()=>tree,
+  herdr:async(name,args)=>{calls.push({name,args});},notify:notice=>{throw new Error(notice.body);}});
+ const view=Object.assign(Object.create(Chat.prototype),{myPane:()=>pane,terminal:()=>terminal});
+ const cx={open_url(){throw new Error('A machine-owned file must not open on the local desktop.');},spawn(fn){tasks.push(fn(cx));}};
+ return {view,cx,calls,tasks,saved:()=>saved};
+}
+test('offline terminals open files using their verified pane machine and last known folder',async()=>{
+ const pane={tab:'alias/tab',pane:'alias/pane',terminal:'alias/t1',cwd:'/remote/repo'};
+ const tree={id:'panel',hidden:true,size:{px:640},children:[{id:'panel-body',children:[{id:'chat-preview'}]}]};
+ const s=previewView(null,pane,tree);
+ assert.doesNotThrow(()=>s.view.openFilePreview('docs/setup.md#intro',s.cx));
+ await Promise.all(s.tasks);
+ const request=s.saved()[previewKey(pane)];
+ assert.equal(request.on,'alias');assert.equal(request.file,'/remote/repo/docs/setup.md');
+ assert(!s.calls.some(call=>call.name==='layout.resize'));
+ assert.equal(s.calls.at(-1).name,'layout.show');
+});
+test('closing and reopening a preview never resets a user chosen sidebar width',async()=>{
+ const pane={tab:'tab',pane:'pane',terminal:'t1'};
+ const s=previewView({address:'t1',cwd:'/repo'},pane,{id:'panel',hidden:true,size:{px:700},children:[{id:'chat-preview'}]});
+ s.view.openFilePreview('/repo/a.md',s.cx);await Promise.all(s.tasks);
+ assert.deepEqual(s.calls.map(call=>call.name),['layout.select','layout.show']);
 });
