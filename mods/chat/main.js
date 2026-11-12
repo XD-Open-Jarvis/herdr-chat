@@ -1701,7 +1701,7 @@ export default class Chat extends View {
       return v_flex().id(`row-${e.key}`).w_full().items_end().gap(4).on_hover(this.hover(e.key))
         .when(Boolean(e.from), (el) => el.child(div().text_size(11).text_color(t.dim).child(`hc · ${e.from}`)))
         .when(e.images.length > 0, el => el.child(h_flex().max_w(max).flex_wrap().justify_end().gap(6)
-          .children(e.images.map(i => this.img(i.ref, t, Math.min(420, max), 300)))))
+          .children(e.images.map(i => this.img(i.ref, t, Math.min(160, max), 112)))))
         .when(Boolean(e.files?.length), el => el.child(h_flex().max_w(max).flex_wrap().justify_end().gap(6)
           .children(e.files.map(file => h_flex().max_w(max).min_w(0).gap(8).px(12).py(8).rounded(8).bg(t.raised).tooltip(file.path)
             .child(svg("mods/chat/icons/attachment.svg").size(16).flex_none().text_color(t.muted))
