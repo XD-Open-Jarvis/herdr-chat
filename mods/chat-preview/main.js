@@ -45,17 +45,20 @@ export default class Preview extends View {
  }
  diffCollection(request,t,key) {
   const identity=`${key}:${request.revision}`;
+  const files=request.changes;
+  const filesKey=JSON.stringify(files.map(file=>[file.path,(file.diff??'').length,(file.diff??'').split('\n').length]));
   if(this.collectionId!==identity){
-   this.collectionId=identity;this.diffHeights=[];this.diffOffset=0;this.diffViewport=400;
-   this.diffTarget=Math.max(0,request.changes.findIndex(file=>file.path===request.change?.path));
+   this.collectionId=identity;
+   if(this.collectionFilesKey!==filesKey){this.diffHeights=[];this.diffCollapsed=new Set();this.collectionFilesKey=filesKey;}
+   this.diffViewport??=400;
+   this.diffTarget=Math.max(0,files.findIndex(file=>file.path===request.change?.path));
    this.diffJump=this.diffTarget;
    if(request.collapseOthers){
-    this.diffCollapsed=new Set(request.changes.filter((_,index)=>index!==this.diffTarget).map(file=>file.path));
-    this.diffHeights=request.changes.map((_,index)=>index===this.diffTarget?undefined:FILE_HEADER);
+    this.diffCollapsed=new Set(files.filter((_,index)=>index!==this.diffTarget).map(file=>file.path));
+    this.diffHeights=files.map((_,index)=>index===this.diffTarget?undefined:FILE_HEADER);
    }
-   this.diffCollapsed.delete(request.change?.path);
+   if(this.diffCollapsed.delete(request.change?.path))this.diffHeights[this.diffTarget]=undefined;
   }
-  const files=request.changes;
   const sizes=collectionPosition(files,this.diffHeights,0,this.diffViewport).sizes;
   const trailing=Math.max(0,this.diffViewport-sizes.slice(this.diffTarget).reduce((a,b)=>a+b,0));
   let position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport,trailing);
