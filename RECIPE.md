@@ -30,8 +30,8 @@ Unwrap hc user transport envelopes and retain sender labels; filter internal
 system envelopes. Hidden Chat copies skip expensive rendering, session discovery,
 log polling and terminal scraping. Resume when the view becomes visible.
 
-Keep the shared Alma-style header with workspace, terminal address, title,
-status, search and 对话 / 终端. Preserve native terminal split behavior in TUI.
+Keep the shared conversation header with workspace, terminal address, title,
+status, search and Chat / TUI. Preserve native terminal split behavior in TUI.
 Use neutral focus borders with a single visible pane; accent for multiple panes.
 Do not resend pending layout.set updates on every redraw. Never let border
 reconciliation overwrite a pending Chat selection. Preserve existing shortcuts;

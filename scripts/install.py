@@ -108,7 +108,7 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT/path, target)
     if conflict:
-        print('Kept your existing new-chat shortcut binding; use the header’s 对话 button.')
+        print('Kept your existing new-chat shortcut binding; use the sidebar New Chat button.')
     elif not any(k in global_keys for k in aliases):
         if keyfile.exists():
             shutil.copy2(keyfile, backup/'keys.json')
@@ -119,7 +119,7 @@ def main():
     run([binary, 'do', 'layout.switch', json.dumps({'name':'chat'})], home)
     run([binary, 'status'], home)
     print('Backup:', backup)
-    print('Updated. Supported Claude/Codex terminals now show 对话 / 终端, even before a chat exists.')
+    print('Updated. Supported Claude/Codex terminals now show Chat / TUI, even before a chat exists.')
     print('Only layout/mod files and a non-conflicting shortcut were installed. Existing sessions and Chat bindings were not changed.')
     return 0
 
