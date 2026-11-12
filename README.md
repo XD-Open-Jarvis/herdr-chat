@@ -31,6 +31,9 @@ If the Mac is still sluggish, provide that output; updating the files alone does
 not establish the cause of every terminal performance issue.
 
 Changes from upstream:
+- **Catppuccin themes.** Chat follows system appearance with bundled Latte and Mocha
+  palettes, a mauve accent, translucent chrome/content backgrounds and 92%
+  terminal background opacity. Original palette: https://github.com/catppuccin/palette.
 - **Chat is a client-local view, not another shared pane.** Terminal mode shows
   the original split tree. 对话 opens the selected terminal's Chat across the
   tab content area; 终端 restores the original splits and focuses that terminal.

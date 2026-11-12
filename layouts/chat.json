@@ -72,7 +72,7 @@
       },
       "min": 44,
       "max": 480,
-      "background": "chrome",
+      "background": "#00000000",
       "resizable": false
     },
     {
@@ -221,7 +221,7 @@
       "resizable": false
     }
   ],
-  "background": "canvas",
+  "background": "#00000000",
   "terminal_padding": [
     14,
     12
@@ -235,5 +235,10 @@
     12,
     16
   ],
-  "preview": "layouts/chat.svg"
+  "preview": "layouts/chat.svg",
+  "theme": {
+    "light": "chat-catppuccin-latte",
+    "dark": "chat-catppuccin-mocha"
+  },
+  "terminal_opacity": 0.92
 }

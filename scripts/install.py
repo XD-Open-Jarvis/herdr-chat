@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MODS = ['chat', 'chat-file', 'chat-pane', 'chat-tabs', 'spaces-chat']
 
 def files():
-    result = [Path('layouts/chat.json'), Path('layouts/chat.svg')]
+    result = [Path('layouts/chat.json'), Path('layouts/chat.svg'),
+              Path('themes/chat-catppuccin-mocha.json'), Path('themes/chat-catppuccin-latte.json')]
     for name in MODS:
         for path in sorted((ROOT / 'mods' / name).rglob('*')):
             if path.is_file() and (path.suffix in ('.js', '.svg') or path.name in ('mod.json', 'LICENSE')):
