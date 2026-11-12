@@ -31,6 +31,7 @@ import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
 import { ChatAttention } from "./attention.js";
 import { IdentifyFeedback, identifyKey } from "./identify.js";
+import { Outbox, outboxScope } from "./outbox.js";
 import { herdr, chatTab, away, hide, show, switchView } from "./backstage.js";
 
 const ASK_FIRST = "Answer the question above first.";
@@ -179,6 +180,8 @@ export default class Chat extends View {
     this.open = new Set();
     this.images = {};
     this.attach = [];
+    try { this.outbox = new Outbox(JSON.parse(localStorage.getItem("outbox-v1") ?? "{}")); }
+    catch { this.outbox = new Outbox(); }
     this.pending = []; // sent, not yet in the log: { text, files, users } (users: user messages the log had then)
     this.off = 0;
     this.viewH = 0;
@@ -1172,6 +1175,10 @@ export default class Chat extends View {
     // Agents list) or the agent needing you brings it back; put it away again after.
     const own = !this.presentation && away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
     if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
+    for (const item of this.outbox?.items ?? []) {
+      for (const file of item.attachments) if (file.image) this.cache(file.image, cx, null);
+    }
+    this.pumpOutbox(cx);
     const visible = this.chatVisible();
     if (!visible) {
       this.attention?.update(term, { visible: false }, () => {});
@@ -1395,6 +1402,92 @@ export default class Chat extends View {
     if (!spaces().find((s) => s.id === id)?.named) run("space.rename", { id, name: this.t.title.slice(0, 40) });
   }
 
+  queueContext() {
+    const term = this.terminal();
+    const title = codexTitleIdentity(term);
+    const session = title?.prefix ?? sessionOf(this.file);
+    const kind = agentKind(term);
+    const verified = ["codex", "claude"].includes(kind) && (kind !== "codex" || (this.sessionResolved
+      && (!title || !this.file || titleMatchesFile(title, this.file))));
+    return { scope: verified ? outboxScope(term, session) : null, status: term?.status, turn: term?.turn };
+  }
+
+  saveOutbox() {
+    const value = JSON.stringify(this.outbox);
+    if (value !== this.savedOutbox) {
+      localStorage.setItem("outbox-v1", value);
+      this.savedOutbox = value;
+    }
+  }
+
+  pumpOutbox(cx, id = null) {
+    if (this.dialog || !this.outbox) return;
+    const context = this.queueContext();
+    const item = this.outbox.claim(context, id);
+    this.saveOutbox();
+    if (!item) return;
+    const target = this.term;
+    if (["idle", "done"].includes(context.status)) { this.stream = null; this.running = null; }
+    const pending = { ...item, files: item.paths.length, users: this.userCount(),
+      afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now() };
+    this.pending.push(pending);
+    this.t?.markInput();
+    cx.notify();
+    cx.spawn(async cx => {
+      let error = null;
+      try {
+        const ok = await this.deliver(item.text, item.paths, cx, {
+          target, valid: () => this.term === target && this.queueContext().scope === item.scope,
+          idleOnly: !id, steer: Boolean(id),
+        });
+        if (!ok) error = this.error || "Message was not sent.";
+      } catch (e) { error = String(e?.message ?? e); }
+      this.outbox.finish(item.id, error);
+      if (error) this.pending = this.pending.filter(message => message !== pending);
+      this.saveOutbox();
+      cx.notify();
+    });
+  }
+
+  outboxView(t) {
+    if (!this.outbox.items.length) return null;
+    const scope = this.queueContext().scope;
+    const height = Math.min(240, this.outboxHeight ?? this.outbox.items.length * 100);
+    const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
+    return h_flex().w_full().justify_center().child(div().id("outbox-scroll").w_full().max_w(900)
+      .h(height).flex_none().relative().overflow_hidden()
+      .on_scroll_wheel((e, cx) => {
+        this.outboxOffset = Math.max(0, Math.min(offset - e.delta.y, (this.outboxHeight ?? height) - height));
+        cx.stop_propagation(); cx.notify();
+      })
+      .child(v_flex().absolute().left(0).right(0).top(-offset).items_end().gap(8)
+        .on_size_change((size, cx) => {
+          if (Math.abs(size.height - (this.outboxHeight ?? 0)) > 0.5) {
+            this.outboxHeight = size.height; cx.notify();
+          }
+        })
+        .children(this.outbox.items.map((item, index) => {
+          const paused = scope !== item.scope;
+          const unavailable = paused || !["idle", "done", "working"].includes(this.queueContext().status);
+          return v_flex().id(`outbox-${item.id}`).w_auto()
+            .max_w(Math.max(180, Math.min(900, this.width - 32) * 0.7)).flex_none().gap(5).px(12).py(9)
+            .rounded(12).border_1().border_color(t.border).bg(t.surface)
+            .child(h_flex().gap(8).items_center().text_size(11).text_color(t.muted)
+              .child(div().flex_1().min_w(0).child(paused ? "Paused · different session" : item.state === "sending" ? "Sending…" : `Queued · ${index + 1}`))
+              .when(item.state !== "sending", el => el
+                .child(this.button(`outbox-send-${item.id}`, "Send now", (_e, cx) => this.pumpOutbox(cx, item.id), t)
+                  .when(unavailable, button => button.opacity(0.4))
+                  .tooltip(paused ? "Return to this session to send" : unavailable ? "Resolve the agent prompt before sending" : "Send this message now"))
+                .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).tooltip("Remove queued message")
+                  .on_click((_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }).child("×"))))
+            .when(Boolean(item.text), el => el.child(div().text_size(13).child(item.text)))
+            .when(item.attachments.length > 0, el => el.child(h_flex().gap(6).flex_wrap()
+              .children(item.attachments.map(file => file.image ? this.img(file.image.ref, t, 96, 64)
+                : div().text_size(11).text_color(t.muted).child(file.name)))))
+            .when(Boolean(item.error), el => el.child(div().text_size(11).text_color(t.blocked).child(item.error)));
+        }))));
+  }
+
   userCount() {
     return (this.t?.entries ?? []).filter((e) => e.kind === "user").length;
   }
@@ -1495,11 +1588,10 @@ export default class Chat extends View {
     }
   }
 
-  cache(img, cx) {
+  cache(img, cx, on = machineOf(this.term)) {
     img.ref ??= img.data ? hash(img.data.slice(0, 8192) + img.data.length) : hash(img.path);
     if (this.images[img.ref]) return;
     this.images[img.ref] = "pending";
-    const on = machineOf(this.term);
     cx.spawn(async (cx) => {
       try {
         const ext = img.ext ?? (img.path.split(".").pop() || "png").toLowerCase();
@@ -1547,10 +1639,22 @@ export default class Chat extends View {
     if (this.idleAsk) { this.error = ASK_FIRST; return cx.notify(); }
     // A lone "/" would open the terminal's own menu and run its first command.
     if (!this.term || ((!text || text === "/") && !files.length)) { if (!files.length) this.input.set_value(""); return; }
+    const context = this.queueContext();
+    if (!/^[\/!]/.test(text) && !context.scope && ["working", "blocked"].includes(this.terminal()?.status)) {
+      this.error = "Wait for the conversation to be identified before queueing a message.";
+      return cx.notify();
+    }
     const attachments = this.attach.map(attachment => ({ ...attachment }));
     this.input.set_value("");
     this.attach = [];
     this.off = 0;
+    // Regular messages wait for a free turn; commands retain their immediate behavior.
+    if (!/^[\/!]/.test(text) && context.scope) {
+      this.outbox.enqueue({ text, paths: files, attachments }, context.scope);
+      this.saveOutbox();
+      this.pumpOutbox(cx);
+      return cx.notify();
+    }
     // Slash commands and ! lines are logged as notes, not messages: no bubble for them.
     if (!/^[\/!]/.test(text)) {
       this.pending.push({ text, files: files.length, attachments, users: this.userCount(),
@@ -1564,7 +1668,9 @@ export default class Chat extends View {
     cx.notify();
   }
 
-  async deliver(text, files, cx) {
+  async deliver(text, files, cx, options = {}) {
+    const target = options.target ?? this.term;
+    if (options.valid && !options.valid()) throw new Error("The conversation changed; message remains queued.");
     if (agentKind(this.terminal()) === "codex" && /^\/(?:resume|fork|new|clear)(?:\s|$)/.test(text)) {
       const key = bindingKey(this.owner, this.terminalId);
       const records = { ...(shared("chat.bindings") ?? {}) };
@@ -1577,16 +1683,25 @@ export default class Chat extends View {
     const paths = [];
     for (const f of files) {
       // An agent on another machine needs the file there.
-      if (machineOf(this.term)) {
-        const r = await hc(["put", this.term, f]);
+      if (machineOf(target)) {
+        const r = await hc(["put", target, f]);
+        if (options.valid && r.code !== 0) throw new Error(r.stderr.trim() || "Could not upload the attachment.");
         paths.push(r.code === 0 ? r.stdout.trim() : f);
       } else paths.push(f);
     }
     const message = [...paths.map(shellEscape), text].filter(Boolean).join(" ");
     if (!message) return;
-    const r = await hc(["send", this.term, message]);
+    if (options.valid && !options.valid()) throw new Error("The conversation changed; message remains queued.");
+    const r = await hc(["send", ...(options.idleOnly ? ["--if", "idle"] : []), target, message]);
     this.error = r.code === 0 ? null : r.stderr.trim() || "send failed";
+    if (r.code === 0 && options.steer && agentKind(this.terminal()) === "claude"
+      && this.terminal()?.status === "working" && options.valid?.()) {
+      const now = await hc(["keys", target, "ctrl+enter"]);
+      if (now.code !== 0) this.error = "Message reached Claude, but could not be sent immediately. Check TUI.";
+      // The text was accepted already. Never duplicate it when the shortcut fails.
+    }
     cx.notify();
+    return r.code === 0;
   }
 
   // Starts one terminal in a new space and selects its local Chat view.
@@ -1717,7 +1832,7 @@ export default class Chat extends View {
         await fs.mkdir(`${appHome()}/${CACHE}/files`, { recursive: true }).catch(() => {});
         if ((await exec("cp", ["-R", src, path])).code !== 0) { this.error = `Couldn't attach ${name}`; continue; }
         const a = { path, name, image: IMAGE_EXT.test(name) ? { path } : null };
-        if (a.image) this.cache(a.image, cx);
+        if (a.image) this.cache(a.image, cx, null);
         this.attach.push(a);
       }
       cx.notify();
@@ -2259,7 +2374,7 @@ export default class Chat extends View {
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)
           .text_color(stop ? t.accent_foreground : typed || this.dialog ? t.solid_foreground : t.dim)
           .hover((s) => s.opacity(0.85))
-          .tooltip(stop ? "Stop" : this.dialog ? "Start" : "Send")
+          .tooltip(stop ? "Stop" : this.dialog ? "Start" : working ? "Queue message" : "Send")
           .on_click((_e, cx) => (stop ? hc(["interrupt", this.term]) : this.send(cx)))
           .child(stop ? div().size(12).flex_none().rounded(2).bg(t.accent_foreground) : "↑")));
     return v_flex().flex_none().bg(t.background).px(16).pb(14).gap(8)
@@ -2274,6 +2389,7 @@ export default class Chat extends View {
       .when(Boolean(this.slash()), (el) => el.child(h_flex().w_full().justify_center().child(this.commandMenu(t))))
       .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.emojiView(t))))
       .when(!this.slash() && Boolean(this.mentionMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.mentionView(t))))
+      .when(!this.dialog && this.outbox.items.length > 0, el => el.child(this.outboxView(t)))
       .child(h_flex().w_full().justify_center().child(card));
   }
 
