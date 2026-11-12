@@ -11,6 +11,6 @@ export function chooseBinding(previous, result, process) {
   if (result?.file) return { file: result.file, process, evidence: result.evidence };
   // An explicit status panel with a different/missing log is contradictory
   // evidence. An ordinary screen with too little matching text is not.
-  if (result?.evidence === 'status') return null;
+  if (['status', 'title'].includes(result?.evidence)) return null;
   return previous?.process === process ? previous : null;
 }

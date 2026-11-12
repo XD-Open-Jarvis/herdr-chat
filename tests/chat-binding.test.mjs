@@ -29,3 +29,6 @@ test('binding owner keys survive connection alias changes and isolate panes',()=
  assert.notEqual(first,bindingKey({owner_tab:'mini/tab',owner_pane:'mini/other'},'mini/t1'));
  assert.equal(bindingKey({},'t1'),null);
 });
+test('a new title whose log is not yet available revokes the old binding',()=>{
+ assert.equal(chooseBinding(bound,{file:null,evidence:'title'},bound.process),null);
+});

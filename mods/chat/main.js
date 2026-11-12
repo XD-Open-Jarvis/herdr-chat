@@ -18,6 +18,7 @@ import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
 import { resolveSession } from "./session.js";
+import { codexTitleIdentity, titleMatchesFile } from "./title.js";
 import { bindingKey, chooseBinding } from "./binding.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
@@ -1180,6 +1181,7 @@ export default class Chat extends View {
     if (this.sourceAddress !== identitySource) {
       this.sourceAddress = identitySource;
       this.sessionResolved = false;
+      this.waitingForLog = false;
       this.binding = null;
       this.bindingEpoch = (this.bindingEpoch ?? 0) + 1;
       this.gen++;
@@ -1191,8 +1193,10 @@ export default class Chat extends View {
       this.running = null;
     }
     const kind = agentKind(term);
+    const titleIdentity = kind === "codex" && codexTitleIdentity(term);
     const seen = this.attention.update(term, { visible, active: appWindow().active,
-      ready: Boolean(this.t?.entries.length) && (kind !== "codex" || this.sessionResolved) }, async (address, turn) => {
+      ready: Boolean(this.t?.entries.length) && (kind !== "codex" || this.sessionResolved)
+        && (!titleIdentity || titleMatchesFile(titleIdentity, this.file)) }, async (address, turn) => {
       const result = await hc(["label", address, `herdr.seen=${turn}`]);
       if (result.code !== 0) throw new Error(result.stderr || "Could not mark the conversation read");
     });
@@ -1201,14 +1205,22 @@ export default class Chat extends View {
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
     const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
     this.ticks++;
-    if (sig && !this.locating && (sig !== this.sig || this.ticks % 3 === 0 || !this.file)) {
+    const titleChanged = titleIdentity && !titleMatchesFile(titleIdentity, this.file);
+    if (sig && !this.locating && (sig !== this.sig || titleChanged || this.ticks % 3 === 0 || !this.file)) {
       this.locating = true;
       const epoch = this.bindingEpoch;
       cx.spawn(async (cx) => {
+        const capturedTitle = kind === "codex" ? codexTitleIdentity(term)?.prefix ?? null : null;
+        const stillCurrent = () => epoch === this.bindingEpoch
+          && `${this.term}:${this.terminal()?.foreground?.pid}` === identitySource
+          && (kind !== "codex" || (codexTitleIdentity(this.terminal())?.prefix ?? null) === capturedTitle);
         try {
           let file = null;
-          try { file = await locate(term, kind); }
-          catch (error) { if (kind !== "codex") throw error; }
+          let waitingForLog = false;
+          if (kind !== "codex" || !capturedTitle) {
+            try { file = await locate(term, kind); }
+            catch (error) { if (kind !== "codex") throw error; }
+          }
           if (kind === "codex") {
             // PID alone can be reused after an exit/reboot. Match its start
             // time too before restoring a binding after mod/app reload.
@@ -1217,17 +1229,25 @@ export default class Chat extends View {
             const process = `${term.foreground.pid}:${started.stdout.trim()}`;
             const key = bindingKey(this.owner, this.terminalId);
             const saved = key ? (shared("chat.bindings") ?? {})[key] : null;
-            const previous = this.binding?.process === process ? this.binding : saved?.process === process ? saved : null;
-            if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+            const titleIdentity = codexTitleIdentity(term);
+            let previous = this.binding?.process === process ? this.binding : saved?.process === process ? saved : null;
+            if (titleIdentity && previous && !titleMatchesFile(titleIdentity, previous.file)) previous = null;
+            if (!stillCurrent()) return;
+            if (titleIdentity && this.file && !titleMatchesFile(titleIdentity, this.file)) {
+              this.gen++; this.file = null; this.t = null; this.sessionResolved = false;
+              this.streamLoop = null; this.stream = null; this.running = null;
+              cx.notify();
+            }
             this.binding = previous;
-            if (previous) {
+            if (previous && !titleIdentity) {
               this.sessionResolved = true;
               if (previous.file !== this.file) this.start(previous.file, machineOf(term.address), kind, cx);
               cx.notify();
             }
-            const screen = await hc(["read", term.address]);
+            const screen = titleIdentity ? { stdout: "" } : await hc(["read", term.address]);
             const result = await resolveSession(term, screen.stdout, file);
-            if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+            if (!stillCurrent()) return;
+            waitingForLog = result.evidence === "title" && result.matchCount === 0;
             const next = chooseBinding(previous, result, process);
             this.binding = next;
             file = next?.file ?? null;
@@ -1237,9 +1257,10 @@ export default class Chat extends View {
               setShared("chat.bindings", records);
             }
           }
-          if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+          if (!stillCurrent()) return;
           this.sig = sig;
-          this.sessionResolved = Boolean(file);
+          this.waitingForLog = waitingForLog;
+          this.sessionResolved = Boolean(file) || waitingForLog;
           this.error = null;
           if (!file && kind === "codex") {
             this.gen++; this.file = null; this.t = null;
@@ -1248,7 +1269,7 @@ export default class Chat extends View {
           if (file && file !== this.file) this.start(file, machineOf(this.term), kind, cx);
           this.missing = !file && !this.file;
         } catch (e) {
-          if (epoch !== this.bindingEpoch || `${this.term}:${this.terminal()?.foreground?.pid}` !== identitySource) return;
+          if (!stillCurrent()) return;
           // A transient read/probe failure does not invalidate a verified
           // binding in this live process. New instances wait for verification.
           if (kind === "codex" && !this.binding) {
@@ -1493,7 +1514,10 @@ export default class Chat extends View {
   }
 
   send(cx) {
-    if (agentKind(this.terminal()) === "codex" && !this.sessionResolved) return;
+    if (agentKind(this.terminal()) === "codex") {
+      const identity = codexTitleIdentity(this.terminal());
+      if (!this.sessionResolved || (identity && this.file && !titleMatchesFile(identity, this.file))) return;
+    }
     const menu = this.slash();
     if (menu) return this.choose(menu.pickable[menu.sel], cx);
     const mm = this.mentionMenu();
@@ -2140,11 +2164,12 @@ export default class Chat extends View {
         .bg(t.popover).border_1().border_color(t.border).text_size(12).text_color(t.foreground)
         .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.off = 0; cx.notify(); }).child("↓ Latest"));
     }
-    if (!this.t) {
+    if (!this.t && !this.pending.length) {
       const term = this.terminal(), name = AGENTS[agentKind(term)] ?? "The agent";
       const asking = Boolean(this.screen) && (term?.status === "blocked" || Boolean(parsePrompt(this.screen)));
       const msg = this.error
-        ?? (!term ? "This chat's agent has ended." : asking ? `${name} needs an answer before it starts:`
+        ?? (this.waitingForLog ? "Waiting for the session log. You can send a message below."
+          : !term ? "This chat's agent has ended." : asking ? `${name} needs an answer before it starts:`
           : term.status === "working" ? `${name} is working…`
           : this.missing ? `${name} is ready. Type your first message below.` : "Loading…");
       scroll.child(v_flex().absolute().inset_0().items_center().justify_center().gap(14).p(24)
@@ -2337,9 +2362,11 @@ export default class Chat extends View {
       return v_flex().id("root").size_full().bg(t.background).items_center().justify_center().text_color(t.dim)
         .child(`No agent here. Press ${shortcut("⇧N")} for a new chat.`);
     }
-    if (!this.dialog && agentKind(term) === "codex" && !this.sessionResolved) {
+    const titleIdentity = codexTitleIdentity(term);
+    const changedTitle = titleIdentity && this.file && !titleMatchesFile(titleIdentity, this.file);
+    if (!this.dialog && agentKind(term) === "codex" && (!this.sessionResolved || changedTitle)) {
       return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).p(24).gap(12)
-        .child(this.locating ? "Identifying the conversation…" : "The current conversation could not be identified confidently.")
+        .child(this.locating || changedTitle ? "Identifying the conversation…" : "The current conversation could not be identified confidently.")
         .child("In TUI, run /status and leave its result visible. Then return here and check again.")
         .child(h_flex().w_full().flex_none().gap(8).items_center()
           .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t).w_auto())

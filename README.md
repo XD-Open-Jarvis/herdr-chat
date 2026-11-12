@@ -212,3 +212,10 @@ Note that `terminals().status` is the raw agent phase (often `idle` after
 completion), whereas the sidebar's `done` is derived from unread turns. Chat
 acknowledges raw `idle` as well as `done`, and handles the status event arriving
 before the incremented turn event.
+
+New Chat-created Codex terminals now opt into terminal-title identity using a
+per-launch `tui.terminal_title` override. This avoids log-text guessing across
+in-place forks/resumes for the tested Codex 0.167.1. The emitted ID is truncated,
+so the layout validates its prefix against metadata and requires a unique match.
+Existing terminals and global Codex configuration are unchanged. See
+[the verification and limitations](docs/codex-title-identity.md).

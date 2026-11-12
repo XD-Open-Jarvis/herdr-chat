@@ -1,6 +1,7 @@
 // Models and effort levels for Claude Code and Codex: what can be picked,
 // how to start an agent with them, and how to switch a running one.
 import { exec, hc } from "herdr";
+import { CODEX_TITLE_CONFIG } from "./title.js";
 
 export const CLAUDE_MODELS = [
   { id: "claude-opus-5-5", name: "Opus 5.5", alias: "opus" },
@@ -41,7 +42,7 @@ export const modelName = (models, id) =>
 
 export function launchArgv(kind, model, effort, task) {
   const argv = kind === "codex"
-    ? ["codex", ...(model ? ["-m", model] : []), ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : [])]
+    ? ["codex", "-c", CODEX_TITLE_CONFIG, ...(model ? ["-m", model] : []), ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : [])]
     : ["claude", ...(model ? ["--model", model] : []), ...(effort ? ["--effort", effort] : [])];
   if (task) argv.push(task);
   return argv;

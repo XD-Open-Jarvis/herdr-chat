@@ -1,5 +1,6 @@
 import { openChat as openConversation, showTerminal, presentationPane } from "./presentation.js";
 import { qualifyAddress, machineOfTab } from "./identity.js";
+import { conversationTitle } from "./title.js";
 // A pane's header, for layouts that frame their panes:
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "chat-pane" } } } }
 // Shows the program's icon (the app's program table), the agent's name or
@@ -168,7 +169,7 @@ export default class Pane extends View {
 
   conversationHeader(p, pair, t) {
     const space = spaces().find((s) => s.tabs?.some((tab) => tab.id === (pair.chat?.tab ?? p.tab)));
-    const title = pair.term.title || pair.term.name || pair.term.report?.app || "Chat";
+    const title = conversationTitle(pair.term) || pair.term.name || pair.term.report?.app || "Chat";
     const chatMode = Boolean(props()?.presentation) || p.mod === "chat";
     const segment = (mode, label) => div().id(`view-${mode}-${p.pane}`).px(12).h(28).rounded(7)
       .flex().items_center().justify_center().cursor_pointer().text_size(12.5).font_medium()

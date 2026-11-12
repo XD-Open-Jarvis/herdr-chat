@@ -1,13 +1,32 @@
 import { exec } from "herdr";
 import { HISTORY_PY } from "./history.js";
 import { machineOf } from "./source.js";
+import { codexTitleIdentity } from "./title.js";
 
 // Match only structured conversation bodies, never tool output. Shared fork
 // history is deliberately present in every candidate so it cannot break ties.
 export const SESSION_PY = `
 import json, pathlib, sys, re, io, contextlib
-screen, cwd, hint, history = json.loads(sys.argv[1])
+screen, cwd, hint, history, *extra = json.loads(sys.argv[1])
+identity = extra[0] if extra else None
 root = pathlib.Path.home()/".codex"/"sessions"
+# The terminal supplied this identity. Never replace it with a cwd/text guess
+# while its new log is being created or when the prefix is ambiguous.
+if identity:
+    prefix = identity.get("prefix", "")
+    if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{5,12}", prefix):
+        raise RuntimeError("Invalid terminal title identity")
+    matches = []
+    for path in root.rglob("rollout-*" + prefix + "*.jsonl"):
+        try:
+            with path.open() as stream: meta = json.loads(stream.readline()).get("payload", {})
+            ident = meta.get("id", "")
+            if ident.startswith(prefix) and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", ident):
+                if identity.get("complete") and ident != prefix: continue
+                matches.append((str(path), ident))
+        except Exception: pass
+    found = matches[0] if len(matches) == 1 else (None, None)
+    print(json.dumps({"file":found[0], "sessionId":found[1], "evidence":"title", "matchCount":len(matches)})); sys.exit()
 def norm(s):
     s = re.sub(r"\\x1b\\[[0-?]*[ -/]*[@-~]", "", s)
     return re.sub(r"[\\W_]+", "", s).casefold()
@@ -72,7 +91,7 @@ print(json.dumps({"file":file,"evidence":"text" if file else "ambiguous"}))
 `;
 
 export async function resolveSession(term, screen, hint) {
-  const result = await exec("python3", ["-c", SESSION_PY, JSON.stringify([screen, term.foreground?.cwd ?? "", hint, HISTORY_PY])], { on: machineOf(term.address), timeout: 30000 });
+  const result = await exec("python3", ["-c", SESSION_PY, JSON.stringify([screen, term.foreground?.cwd ?? "", hint, HISTORY_PY, codexTitleIdentity(term)])], { on: machineOf(term.address), timeout: 30000 });
   if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not identify the conversation");
   return JSON.parse(result.stdout);
 }
