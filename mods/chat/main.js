@@ -2282,7 +2282,8 @@ export default class Chat extends View {
         .children(diffGroups(diffLines(file)).map((group,index) => div().px(10).w_full().min_w(0).flex_none()
           .child(TextView.html(`hover-diff-${id}-${index}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
             .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
-    return HoverCard.new(`diff-hover-${id}`).open_delay(250).close_delay(250).anchor(geometry.anchor).trigger(trigger).content(content);
+    return HoverCard.new(`diff-hover-${id}`).w_auto().self_start().flex_none()
+      .open_delay(250).close_delay(250).anchor(geometry.anchor).trigger(trigger).content(content);
   }
 
   changeBlock(entry, t) {
@@ -2291,7 +2292,7 @@ export default class Chat extends View {
     const stats = (added,removed) => h_flex().gap(6).flex_none().text_size(12.5)
       .when(added!=null,el=>el.child(div().text_color(t.done).child(`+${added}`)))
       .when(removed!=null,el=>el.child(div().text_color(t.ansi1).child(`−${removed}`)));
-    const title = div().id(`preview-change-${entry.key}`).truncate().text_size(14).font_semibold().cursor_pointer()
+    const title = div().id(`preview-change-${entry.key}`).w_auto().self_start().flex_none().truncate().text_size(14).font_semibold().cursor_pointer()
       .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx))
       .child(entry.files.length===1?`${entry.files[0].operation==='delete'?'Deleted':entry.files[0].operation==='add'?'Added':'Edited'} ${overview.labels[0]}`:`Edited ${entry.files.length} files`);
     let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center().bg(t.chrome)
@@ -2310,9 +2311,10 @@ export default class Chat extends View {
           const id=`${entry.key}-${index}`;
           const row=h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center()
             .when(index===files.length-1&&(entry.files.length<=3||expanded),el=>el.rounded_b(11))
-            .child(div().flex_1().min_w(0).child(this.changeHover(id,div().w_auto().truncate().text_size(13).cursor_pointer()
+            .child(this.changeHover(id,div().w_auto().min_w(0).flex_none().truncate().text_size(13).cursor_pointer()
               .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx,index))
-              .child(overview.labels[index]),file,entry.key,t)))
+              .child(overview.labels[index]),file,entry.key,t))
+            .child(div().flex_1())
             .child(stats(file.added,file.removed));
           return row;
         }))))
