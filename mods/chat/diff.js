@@ -30,3 +30,31 @@ export function diffGroups(lines) {
   }
   return groups;
 }
+
+// Keep line numbers from recorded hunk headers. Some tool records omit them;
+// those rows deliberately show an empty gutter instead of guessed numbers.
+export function diffBlocks(file) {
+  let before = null, after = null;
+  const blocks = [];
+  for (const line of diffLines(file)) {
+    if (line.kind === "header") continue;
+    if (line.kind === "hunk") {
+      const match = /^@@ -([0-9]+)(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@/.exec(line.text);
+      if (match) { before = Number(match[1]); after = Number(match[2]); continue; }
+    }
+    const kind = line.kind;
+    const number = kind === "removed" ? before : after;
+    if (kind === "removed" && before != null) before++;
+    else if (kind === "added" && after != null) after++;
+    else if (kind === "context" && line.text.startsWith(" ")) {
+      if (before != null) before++;
+      if (after != null) after++;
+    }
+    const code = ["added", "removed"].includes(kind) || (kind === "context" && line.text.startsWith(" "))
+      ? line.text.slice(1) : line.text;
+    const block = blocks.at(-1);
+    if (block?.kind === kind) { block.numbers.push(number == null ? "" : String(number)); block.code.push(code); }
+    else blocks.push({ kind, numbers: [number == null ? "" : String(number)], code: [code] });
+  }
+  return blocks;
+}

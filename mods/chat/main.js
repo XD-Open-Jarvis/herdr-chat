@@ -32,6 +32,7 @@ import { withPending } from "./timeline.js";
 import { sidebarVisible, hoverGeometry } from "./hover-diff.js";
 import { fileLink, previewKey, previewLayout } from "./preview.js";
 import { diffLines, diffGroups } from "./diff.js";
+import { renderDiffBlocks } from "./diff-render.js";
 import { compactSettings, toolSummary, summaryLine, commandPreview } from "./display.js";
 import { toolDetails, withChanges, changeOverview } from "./activity.js";
 import { ChatAttention } from "./attention.js";
@@ -2269,15 +2270,14 @@ export default class Chat extends View {
       const next = hoverGeometry(event.bounds, viewport, width);
       if (JSON.stringify(next) !== JSON.stringify(this.diffHoverGeometry[id])) { this.diffHoverGeometry[id] = next; cx.notify(); }
     });
-    const colors = {added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
-    const escape = text => text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const content = v_flex().w(geometry.width).max_h(geometry.height).rounded(10).border_1().border_color(t.input).bg(t.popover).shadow_lg().overflow_hidden()
       .on_scroll_wheel((_event,cx) => cx.stop_propagation())
-      .child(div().h(36).flex_none().px(12).flex().items_center().text_size(12).font_semibold().child(file.path.split(/[\\/]/).at(-1)))
+      .child(h_flex().h(36).flex_none().px(12).gap(8).items_center().bg(t.chrome).text_size(12).font_semibold()
+        .child(div().flex_1().min_w(0).truncate().child(file.path))
+        .child(div().text_color(t.ansi2).child(file.added!=null?`+${file.added}`:""))
+        .child(div().text_color(t.ansi1).child(file.removed!=null?`−${file.removed}`:"")))
       .child(v_flex().id(`hover-scroll-${id}`).h(Math.min(Math.max(64,geometry.height-38),Math.max(80,diffLines(file).length*18+16))).flex_none().overflow_y_scrollbar().py(8)
-        .children(diffGroups(diffLines(file)).map((group,index) => div().px(10).w_full().min_w(0).flex_none()
-          .child(TextView.html(`hover-diff-${id}-${index}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
-            .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
+        .children(renderDiffBlocks(file,`hover-diff-${id}`,t,settings().font_family)));
     return HoverCard.new(`diff-hover-${id}`).w_auto().self_start().flex_none()
       .open_delay(250).close_delay(250).anchor(geometry.anchor).trigger(trigger).content(content);
   }
