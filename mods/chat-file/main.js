@@ -6,11 +6,28 @@ import { props, theme, settings, readTextFile, writeTextFile, closeOverlay, exec
 
 const LANG = { md: "markdown", json: "json", toml: "toml", js: "javascript", sh: "bash", yaml: "yaml", yml: "yaml" };
 
+export function imageFit(viewport, width, height) {
+  return Math.min(1, Math.max(1, viewport.width - 24) / Math.max(1, width),
+    Math.max(1, viewport.height - 24) / Math.max(1, height));
+}
+
+export function imageBounds(viewport, width, height, scale, offset) {
+  const w = Math.max(1, Math.round(width * scale)), h = Math.max(1, Math.round(height * scale));
+  const limitX = Math.max(0, (w - viewport.width + 24) / 2);
+  const limitY = Math.max(0, (h - viewport.height + 24) / 2);
+  const x = Math.max(-limitX, Math.min(limitX, offset.x)) || 0;
+  const y = Math.max(-limitY, Math.min(limitY, offset.y)) || 0;
+  return { width: w, height: h, x, y, left: (viewport.width - w) / 2 + x, top: (viewport.height - h) / 2 + y };
+}
+
 export default class ChatFile extends View {
   init(_props, cx) {
     const p = props() ?? {};
     if (p.image) {
       this.viewport = { width: 860, height: 610 };
+      this.imageScale = null; // null follows the window's fit size
+      this.imageOffset = { x: 0, y: 0 };
+      this.imageDrag = null;
       return;
     }
     this.file = p.file;
@@ -49,23 +66,70 @@ export default class ChatFile extends View {
     });
   }
 
+  zoomImage(scale, cx, point = null) {
+    const p = props();
+    const fit = imageFit(this.viewport, p.imageWidth, p.imageHeight);
+    const old = this.imageScale ?? fit;
+    const next = Math.max(Math.min(0.1, fit), Math.min(8, scale));
+    const bounds = imageBounds(this.viewport, p.imageWidth, p.imageHeight, old, this.imageOffset);
+    const x = (point?.x ?? this.viewport.width / 2) - this.viewport.width / 2;
+    const y = (point?.y ?? this.viewport.height / 2) - this.viewport.height / 2;
+    const moved = imageBounds(this.viewport, p.imageWidth, p.imageHeight, next,
+      { x: x - (x - bounds.x) * next / old, y: y - (y - bounds.y) * next / old });
+    this.imageScale = next;
+    this.imageOffset = { x: moved.x, y: moved.y };
+    cx.notify();
+  }
+
   imageView(p, t) {
-    const scale = Math.min(1, Math.max(1, this.viewport.width - 24) / p.imageWidth,
-      Math.max(1, this.viewport.height - 24) / p.imageHeight);
+    const fit = imageFit(this.viewport, p.imageWidth, p.imageHeight);
+    const scale = this.imageScale ?? fit;
+    const bounds = imageBounds(this.viewport, p.imageWidth, p.imageHeight, scale, this.imageOffset);
+    const button = (id, text, tip, action) => div().id(id).flex_none().h(28).px(8).rounded(5)
+      .flex().items_center().justify_center().cursor_pointer().text_size(12).tooltip(tip)
+      .hover(s => s.bg(t.hover)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); action(cx); }).child(text);
     return v_flex().id("image-window").size_full().bg(t.background).text_color(t.foreground)
-      .child(h_flex().h(40).px(14).gap(12).items_center().flex_none()
+      .child(h_flex().h(40).px(14).gap(4).items_center().flex_none()
         .child(div().flex_1().min_w(0).truncate().text_size(13).child(p.title ?? "Image"))
-        .child(div().id("close-image").px(8).py(4).rounded(5).cursor_pointer().tooltip("Close")
-          .hover(s => s.bg(t.hover))
-          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .on_click((_e, cx) => { cx.stop_propagation(); closeOverlay(p.overlay); }).child("×")))
-      .child(div().id("image-viewport").flex_1().min_h(0).flex().items_center().justify_center().overflow_hidden()
+        .child(button("image-minus", "−", "Zoom out", cx => this.zoomImage(scale / 1.25, cx)))
+        .child(div().w(48).flex_none().text_size(11.5).text_color(t.muted).child(`${Math.round(scale * 100)}%`))
+        .child(button("image-plus", "+", "Zoom in", cx => this.zoomImage(scale * 1.25, cx)))
+        .child(button("image-original", "100%", "Actual size", cx => this.zoomImage(1, cx)))
+        .child(button("image-fit", "Fit", "Fit to window", cx => {
+          this.imageScale = null; this.imageOffset = { x: 0, y: 0 }; cx.notify();
+        }))
+        .child(button("close-image", "×", "Close", () => closeOverlay(p.overlay))))
+      .child(div().id("image-viewport").relative().flex_1().min_h(0).overflow_hidden()
+        .tooltip("Scroll to zoom · Drag to pan")
         .on_size_change((size, cx) => {
           if (size.width !== this.viewport.width || size.height !== this.viewport.height) {
             this.viewport = size; cx.notify();
           }
         })
-        .child(image(p.image).w(Math.round(p.imageWidth * scale)).h(Math.round(p.imageHeight * scale))));
+        .on_scroll_wheel((event, cx) => {
+          cx.stop_propagation();
+          this.zoomImage(scale * Math.exp(Math.max(-0.3, Math.min(0.3, event.delta.y * 0.008))), cx, event.local_position);
+        })
+        .on_mouse_down("left", (event, cx) => {
+          cx.stop_propagation();
+          if (event.click_count === 2) {
+            this.imageScale = this.imageScale === null ? 1 : null;
+            this.imageOffset = { x: 0, y: 0 }; cx.notify(); return;
+          }
+          this.imageDrag = { start: event.position, x: bounds.x, y: bounds.y };
+        })
+        .on_mouse_move((event, cx) => {
+          if (!this.imageDrag) return;
+          const drag = this.imageDrag;
+          const moved = imageBounds(this.viewport, p.imageWidth, p.imageHeight, scale,
+            { x: drag.x + event.position.x - drag.start.x, y: drag.y + event.position.y - drag.start.y });
+          this.imageOffset = { x: moved.x, y: moved.y }; cx.notify();
+        })
+        .on_mouse_up("left", () => { this.imageDrag = null; })
+        .on_hover(on => { if (!on) this.imageDrag = null; })
+        .child(div().absolute().left(bounds.left).top(bounds.top).w(bounds.width).h(bounds.height)
+          .child(image(p.image).w(bounds.width).h(bounds.height))));
   }
 
   render() {
