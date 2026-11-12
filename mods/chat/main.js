@@ -2295,14 +2295,17 @@ export default class Chat extends View {
     const title = div().id(`preview-change-${entry.key}`).w_auto().self_start().flex_none().truncate().text_size(14).font_semibold().cursor_pointer()
       .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx))
       .child(entry.files.length===1?`${entry.files[0].operation==='delete'?'Deleted':entry.files[0].operation==='add'?'Added':'Edited'} ${overview.labels[0]}`:`Edited ${entry.files.length} files`);
-    let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center().bg(t.chrome)
+    let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center()
+      .bg(t.chrome).rounded_t(11).when(entry.files.length===1,el=>el.rounded_b(11))
       .child(div().size(36).flex_none().rounded(10).when(settings().dark,el=>el.bg(t.chrome)).flex().items_center().justify_center()
         .child(svg("mods/chat/icons/edit.svg").size(20).text_color(t.muted)))
       .child(v_flex().flex_1().min_w(0).gap(3)
         .child(entry.files.length===1?this.changeHover(`heading-${entry.key}`,title,entry.files[0],entry.key,t):title)
         .child(stats(overview.added,overview.removed)))
-      .child(this.button(`diff-toggle-${entry.key}`,"View changes",(_event,cx)=>this.openChanges(entry,cx),t)
-        .bg(t.background).border_1().border_color(t.input).rounded(10).py(6));
+      .child(div().id(`diff-toggle-${entry.key}`).flex_none().h(28).px(12).rounded_full().border_1()
+        .border_color(settings().dark?t.input:t.border).flex().items_center().justify_center()
+        .cursor_pointer().text_size(12).text_color(t.foreground)
+        .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx)).child("View changes"));
     return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(settings().dark?t.input:t.border).overflow_hidden()
       .on_size_change((size,cx)=>{this.changeWidths??={};if(this.changeWidths[entry.key]!==size.width){this.changeWidths[entry.key]=size.width;cx.notify();}})
       .child(heading)
