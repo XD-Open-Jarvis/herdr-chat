@@ -30,6 +30,7 @@ import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
 import { compactSettings, toolSummary } from "./display.js";
+import { toolDetails, withChanges } from "./activity.js";
 import { ChatAttention } from "./attention.js";
 import { IdentifyFeedback, identifyKey } from "./identify.js";
 import { Outbox, outboxScope } from "./outbox.js";
@@ -1577,10 +1578,11 @@ export default class Chat extends View {
     const entries = this.t?.entries ?? [];
     // Streaming replies/tools mutate in place; only new entries change the
     // settings projection. Avoid walking the full history on hover or resize.
-    if (this.displaySource !== entries || this.displayCount !== entries.length) {
+    if (this.displaySource !== entries || this.displayCount !== entries.length || this.displayRevision !== this.t?.revision) {
       this.displaySource = entries;
       this.displayCount = entries.length;
-      this.displayEntries = compactSettings(entries);
+      this.displayRevision = this.t?.revision;
+      this.displayEntries = withChanges(compactSettings(entries));
     }
     let ents = this.displayEntries;
     // Searching: only what matches, the newest 200.
@@ -1914,7 +1916,8 @@ export default class Chat extends View {
     return TextView.markdown(id, text).selectable(true);
   }
 
-  entry(e, t, last) {
+  entry(e, t, last, nextKind = null) {
+    if (e.kind === "changes") return this.changeBlock(e, t);
     if (e.kind === "user") {
       // Let actual text layout size the bubble, capped by the panel width.
       const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
@@ -1942,10 +1945,10 @@ export default class Chat extends View {
     if (e.kind === "assistant") {
       // On hover, Copy for the whole reply, in a row under it that's always there.
       const on = this.hovered === e.key && e.key !== "streaming";
-      return v_flex().id(`row-${e.key}`).w_full().gap(6).text_size(14.5).line_height("24px").on_hover(this.hover(e.key))
+      return v_flex().id(`row-${e.key}`).w_full().relative().gap(6).text_size(14.5).line_height("24px").on_hover(this.hover(e.key))
         .child(this.reply(e, t))
-        .child(h_flex().h(24).gap(4).when(on, (el) => el
-          .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t))));
+        .when(nextKind !== "tools", row => row.child(h_flex().h(18).gap(4).when(on, (el) => el
+          .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t).size(18)))));
     }
     if (e.kind === "notice") {
       const at = new Date(e.timestamp);
@@ -2095,8 +2098,10 @@ export default class Chat extends View {
   tools(e, t, last) {
     const open = this.open.has(e.key);
     const running = last && e.items.some((i) => i.result === null) && this.terminal()?.status === "working";
-    const label = toolSummary(e.items, running);
-    const failed = e.items.some((i) => i.error);
+    const described = e.items.map(toolDetails);
+    const visible = described.filter(item => item.name !== "Wait" || item.error || item.result === null);
+    const label = toolSummary(visible.length ? visible : described, running);
+    const failed = described.some((i) => i.error);
     const thumbs = e.items.flatMap((i) => i.images);
     return v_flex().w_full().gap(6)
       .child(h_flex().id(`tg-${e.key}`).gap(6).items_center().cursor_pointer().text_size(13).text_color(t.dim)
@@ -2107,26 +2112,56 @@ export default class Chat extends View {
         .when(running, (el) => el.child(div().flex_none().text_color(t.working).frames(SPINNER, 90)))
         .when(failed, (el) => el.child(div().flex_none().text_color(t.blocked).child("error"))))
       .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 312, 215)))))
-      .when(open, (el) => el.children(e.items.map((i, n) => this.tool(e.key, n, i, t))));
+      .when(open, (el) => el.children((visible.length ? visible : described).map((i, n) => this.tool(e.key, i.id ?? n, i, t))));
+  }
+
+  changeBlock(entry, t) {
+    return v_flex().w_full().gap(6).children(entry.files.map((file, index) => {
+      const id = `${entry.key}-${index}`, open = this.open.has(id);
+      return v_flex().w_full().min_w(0).rounded(10).border_1().border_color(t.border).bg(t.surface)
+        .child(h_flex().px(12).py(10).gap(8).items_center()
+          .child(svg("mods/chat/icons/edit.svg").size(16).flex_none().text_color(t.muted))
+          .child(div().flex_1().min_w(0).truncate().text_size(13).tooltip(file.path)
+            .child(`${file.operation === "delete" ? "Deleted" : file.operation === "add" ? "Added" : "Edited"} ${file.path.split(/[\\/]/).at(-1)}`))
+          .when(file.added != null, el => el.child(div().text_size(12).text_color(t.done).child(`+${file.added}`)))
+          .when(file.removed != null, el => el.child(div().text_size(12).text_color(t.ansi1).child(`−${file.removed}`)))
+          .child(this.button(`diff-${id}`, open ? "Hide changes" : "View changes", (_e, cx) => {
+            open ? this.open.delete(id) : this.open.add(id); cx.notify();
+          }, t)))
+        .when(open, el => el.child(v_flex().px(12).pb(10).gap(4)
+          .when(Boolean(file.oldPath), row => row.child(div().text_size(11).text_color(t.dim).child(`Moved from ${file.oldPath}`)))
+          .child(this.plainOutput(`diff-content-${id}`, file.diff || `${file.operation} ${file.path}`, t, false, false))));
+    }));
   }
 
   tool(key, n, i, t) {
+    i = i.changes ? i : toolDetails(i);
     const id = `tool-${key}-${n}`, open = this.open.has(id);
     const running = i.result === null && this.terminal()?.status === "working";
-    return v_flex().w_full().min_w(0).rounded(10).border_1().border_color(i.error ? t.blocked : t.border).bg(t.surface)
-      .child(h_flex().id(id).px(12).py(8).gap(8).items_center().cursor_pointer()
+    return v_flex().w_full().min_w(0)
+      .when(i.error, el => el.rounded(8).border_1().border_color(t.blocked))
+      .child(h_flex().id(id).px(4).py(3).gap(8).items_center().cursor_pointer()
         .hover(style => style.bg(t.hover))
         .on_click((_event, cx) => { open ? this.open.delete(id) : this.open.add(id); cx.notify(); })
-        .child(svg("mods/chat/icons/plug.svg").size(14).flex_none().text_color(t.dim))
-        .child(div().flex_none().text_size(12.5).font_semibold().text_color(t.foreground).child(i.name))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(i.summary))
+        .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none().text_color(t.dim))
+        .child(div().flex_none().text_size(12.5).text_color(t.muted).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).tooltip(i.summary).child(i.summary))
+        .when(i.changes?.length === 1 && i.changes[0].added != null && !i.error, el => el
+          .child(div().text_size(11.5).text_color(t.done).child(`+${i.changes[0].added}`))
+          .child(div().text_size(11.5).text_color(t.ansi1).child(`−${i.changes[0].removed ?? 0}`)))
         .when(running, el => el.child(div().text_size(12).text_color(t.dim).frames(SPINNER, 90)))
-        .when(!running, el => el.child(div().text_size(12).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : i.result === null ? "Pending" : "Done")))
+        .when(!running && (i.error || i.result === null), el => el.child(div().text_size(11).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : "Pending")))
         .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none().text_color(t.dim)))
       .when(open && i.input != null, el => el.child(v_flex().px(12).pb(10).gap(4)
         .child(div().text_size(11).text_color(t.dim).child("Input"))
-        .child(this.plainOutput(`${id}-input`, typeof i.input === "string" ? i.input
-          : i.input.command ?? i.input.cmd ?? JSON.stringify(i.input, null, 2), t, false, false))))
+        .child(this.plainOutput(`${id}-input`, typeof i.displayInput === "string" ? i.displayInput
+          : i.displayInput?.command ?? i.displayInput?.cmd ?? JSON.stringify(i.displayInput, null, 2), t, false, false))))
+      .when(open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
+        .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
+          this.open.has(`raw-${id}`) ? this.open.delete(`raw-${id}`) : this.open.add(`raw-${id}`); cx.notify();
+        }, t).w_auto().self_start())
+        .when(this.open.has(`raw-${id}`), row => row.child(this.plainOutput(`${id}-raw`,
+          typeof i.input === "string" ? i.input : JSON.stringify(i.input, null, 2), t, false, false)))))
       .when(open && Boolean(i.result?.trim()), el => el.child(v_flex().px(12).pb(10).gap(4)
         .child(div().text_size(11).text_color(t.dim).child("Output"))
         .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
@@ -2275,7 +2310,7 @@ export default class Chat extends View {
     const shown = ents.slice(start);
     // The conversation sits in a centered column as wide as the message card.
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
-    const content = v_flex().id("content").absolute().left(0).right(0).bottom(-this.off).px(side).py(24).gap(18)
+    const content = v_flex().id("content").absolute().left(0).right(0).bottom(-this.off).px(side).py(24).gap(0)
       .on_size_change((size, cx) => {
         // Scrolled up, what's on screen stays put whatever changes below it:
         // new messages, the live card, a streaming reply, a card or an image
@@ -2293,10 +2328,14 @@ export default class Chat extends View {
           .child(`Show earlier (${start})`))))
       .when(start === 0 && Boolean(this.truncated), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().text_size(11.5).text_color(t.dim).child("Older history is in the log but not loaded"))))
-      .children(withPending(shown, this.pending).map((entry, index, entries) => entry.kind === "pending"
-        ? this.queued(entry.message, entry.index, t) : this.entry(entry, t, index === entries.length - 1)))
-      .when(Boolean(this.streamShown()), (el) => el.child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true)))
-      .when(Boolean(this.running), (el) => el.child(this.runningView(t)))
+      .children(withPending(shown, this.pending).map((entry, index, entries) => {
+        const previous = entries[index - 1];
+        const tight = previous && ((["assistant", "tools"].includes(previous.kind) && ["assistant", "tools"].includes(entry.kind)) || entry.kind === "changes");
+        return v_flex().w_full().mt(index ? tight ? 8 : 18 : 0).child(entry.kind === "pending"
+          ? this.queued(entry.message, entry.index, t) : this.entry(entry, t, index === entries.length - 1, entries[index + 1]?.kind));
+      }))
+      .when(Boolean(this.streamShown()), (el) => el.child(v_flex().w_full().mt(8).child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true))))
+      .when(Boolean(this.running), (el) => el.child(v_flex().w_full().mt(8).child(this.runningView(t))))
 ;
 
     const scroll = div().id("scroll").relative().flex_1().min_h(0).overflow_hidden()

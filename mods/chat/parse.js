@@ -86,6 +86,7 @@ export class Transcript {
     this.entries = [];
     this.tools = new Map();
     this.next = 0;
+    this.revision = 0;
     this.title = null;
     // Messages waiting in Claude Code's own queue (sent while it worked), as its
     // queue operations record them: taken in order, absorbed mid-turn, or popped
@@ -215,6 +216,7 @@ export class Transcript {
     if (typeof args === "string") { try { args = JSON.parse(args); } catch {} }
     const item = { id, name, summary: summarize(input), input: args, result: null, error: false, images: [] };
     group.items.push(item);
+    this.revision++;
     if (id) this.tools.set(id, item);
   }
 
@@ -229,6 +231,7 @@ export class Transcript {
     const text = stripAnsi(toText(content));
     item.result = text.length > MAX_RESULT ? text.slice(0, MAX_RESULT) + "\n…" : text;
     item.error = Boolean(error);
+    this.revision++;
   }
 
   feed(line) {

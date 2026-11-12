@@ -36,6 +36,15 @@ export function toolSummary(items, running = false) {
       : /^(bash|shell|exec_command|write_stdin|command_execution)$/.test(name) ? "commands"
       : /^(web|websearch|webfetch|web_search|web_fetch)$/.test(name) ? "web calls"
       : /^(task|agent|spawn_agent)$/.test(name) ? "agents" : item.name;
+    if (category === "edits" && item.changes?.length) {
+      if (item.commands?.length) groups.set("commands", (groups.get("commands") ?? 0) + item.commands.length);
+      for (const file of item.changes) {
+        if (edited.has(file.path)) continue;
+        edited.add(file.path);
+        groups.set(category, (groups.get(category) ?? 0) + 1);
+      }
+      continue;
+    }
     if (category === "edits") {
       let input = item.input;
       if (typeof input === "string") { try { input = JSON.parse(input); } catch {} }
