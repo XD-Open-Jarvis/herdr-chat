@@ -1481,7 +1481,7 @@ export default class Chat extends View {
             const paused = context.scope !== item.scope;
             const unavailable = paused || !["idle", "done", "working"].includes(context.status);
             const hovered = this.outboxHovered === item.id;
-            return h_flex().id(`outbox-${item.id}`).w_full().flex_none().relative().px(12).py(10).gap(10).items_center()
+            return h_flex().id(`outbox-${item.id}`).w_full().min_h(44).flex_none().relative().px(12).py(10).gap(10).items_center()
               .when(index > 0, row => row.child(div().absolute().top(0).left(12).right(12).h(1).bg(t.border)))
               .on_hover((on, cx) => {
                 if (on) this.outboxHovered = item.id;
@@ -1497,10 +1497,10 @@ export default class Chat extends View {
                   .child(paused ? "Paused · different session" : "Sending…")))
                 .when(Boolean(item.error), row => row.child(div().text_right().text_size(11).text_color(t.blocked).child(item.error))))
               // Reserve the action gutter so hover never reflows the message.
-              .child(h_flex().w(90).flex_none().gap(4).items_center().justify_end()
+              .child(h_flex().w(90).h(18).flex_none().gap(4).items_center().justify_end()
                 .when(hovered && item.state !== "sending", row => row
-                  .child(div().id(`outbox-send-${item.id}`).flex_none().px(8).py(0).rounded_full().border_1().border_color(t.input)
-                    .cursor_pointer().text_size(11).text_color(t.foreground)
+                  .child(div().id(`outbox-send-${item.id}`).flex_none().h(18).px(8).rounded_full().border_1().border_color(t.input)
+                    .flex().items_center().justify_center().cursor_pointer().text_size(10).text_color(t.foreground)
                     .hover(style => style.border_color(t.accent).text_color(t.accent))
                     .on_click((_e, cx) => this.pumpOutbox(cx, item.id)).child("Instant")
                     .when(unavailable, button => button.opacity(0.4))
