@@ -47,12 +47,19 @@ export default class Preview extends View {
   const identity=`${key}:${request.revision}`;
   if(this.collectionId!==identity){
    this.collectionId=identity;this.diffHeights=[];this.diffOffset=0;this.diffViewport=400;
-   this.diffJump=Math.max(0,request.changes.findIndex(file=>file.path===request.change?.path));
+   this.diffTarget=Math.max(0,request.changes.findIndex(file=>file.path===request.change?.path));
+   this.diffJump=this.diffTarget;
+   if(request.collapseOthers){
+    this.diffCollapsed=new Set(request.changes.filter((_,index)=>index!==this.diffTarget).map(file=>file.path));
+    this.diffHeights=request.changes.map((_,index)=>index===this.diffTarget?undefined:FILE_HEADER);
+   }
    this.diffCollapsed.delete(request.change?.path);
   }
   const files=request.changes;
-  let position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport);
-  if(this.diffJump!=null){this.diffOffset=position.sizes.slice(0,this.diffJump).reduce((a,b)=>a+b,0);position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport);}
+  const sizes=collectionPosition(files,this.diffHeights,0,this.diffViewport).sizes;
+  const trailing=Math.max(0,this.diffViewport-sizes.slice(this.diffTarget).reduce((a,b)=>a+b,0));
+  let position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport,trailing);
+  if(this.diffJump!=null){this.diffOffset=position.sizes.slice(0,this.diffJump).reduce((a,b)=>a+b,0);position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport,trailing);}
   this.diffOffset=position.offset;
   const button=(id,text,action)=>div().id(id).px(8).py(5).rounded(6).cursor_pointer().text_size(12).text_color(t.muted).hover(s=>s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
   const toggleFile=(file,index,cx)=>{
@@ -80,10 +87,11 @@ export default class Preview extends View {
       .child(TextView.html(`collection-${identity}-${index}-${i}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
        .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
     return row;
-   }));
+   }))
+   .child(div().h(trailing).flex_none());
   const viewport=div().id(`collection-scroll-${identity}`).relative().flex_1().min_h(0).overflow_hidden()
    .on_size_change((size,cx)=>{if(this.diffViewport!==size.height){this.diffViewport=size.height;cx.notify();}})
-   .on_scroll_wheel((event,cx)=>{cx.stop_propagation();this.diffJump=null;const next=collectionPosition(files,this.diffHeights,this.diffOffset-event.delta.y,this.diffViewport);if(next.offset!==this.diffOffset){this.diffOffset=next.offset;cx.notify();}})
+   .on_scroll_wheel((event,cx)=>{cx.stop_propagation();this.diffJump=null;const next=collectionPosition(files,this.diffHeights,this.diffOffset-event.delta.y,this.diffViewport,trailing);if(next.offset!==this.diffOffset){this.diffOffset=next.offset;cx.notify();}})
    .child(content)
    .when(position.offset>position.sizes.slice(0,position.index).reduce((a,b)=>a+b,0)+1,
     el=>el.child(div().absolute().left(0).right(0).top(position.headerTop).child(header(files[position.index],position.index,true))));

@@ -1998,7 +1998,7 @@ export default class Chat extends View {
       .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)));
   }
 
-  openFilePreview(url, cx, change = null, changes = null) {
+  openFilePreview(url, cx, change = null, changes = null, collapseOthers = false) {
     const pane = this.myPane(), term = this.terminal();
     const key = previewKey(pane);
     const target = fileLink(url, term?.foreground?.cwd ?? term?.cwd ?? pane?.cwd, Boolean(change));
@@ -2006,7 +2006,8 @@ export default class Chat extends View {
     const pages = shared("chat.preview") ?? {};
     setShared("chat.preview", {...pages, [key]: {...target, on: machineOf(pane.terminal), change,
       changes: changes?.map(file => ({...file, file: fileLink(file.path, term?.foreground?.cwd ?? term?.cwd ?? pane?.cwd, true)?.file ?? file.path})) ?? null,
-      mode: change ? "diff" : /\.(md|markdown|mdown)$/i.test(target.file) ? "preview" : "source", revision: Date.now()}});
+      mode: change ? "diff" : /\.(md|markdown|mdown)$/i.test(target.file) ? "preview" : "source",
+      collapseOthers, revision: Date.now()}});
     cx.spawn(async () => {
       try {
         const current = layout();
@@ -2259,7 +2260,7 @@ export default class Chat extends View {
 
   openChanges(entry, cx, index = 0) {
     const file = entry.files[index];
-    this.openFilePreview(file.path, cx, file, entry.files);
+    this.openFilePreview(file.path, cx, file, entry.files, !sidebarVisible(layout()));
   }
 
   changeHover(id, trigger, file, entryKey, t) {
