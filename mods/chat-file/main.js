@@ -24,6 +24,9 @@ export default class ChatFile extends View {
   init(_props, cx) {
     const p = props() ?? {};
     if (p.image) {
+      this.imageFocus = cx.focus_handle();
+      this.imageFocus.focus();
+      cx.bind_keys([{ keystroke: "escape", action: "chat_image_close", context: "ChatImage" }]);
       this.viewport = { width: 860, height: 610 };
       this.imageScale = null; // null follows the window's fit size
       this.imageOffset = { x: 0, y: 0 };
@@ -89,7 +92,11 @@ export default class ChatFile extends View {
       .flex().items_center().justify_center().cursor_pointer().text_size(12).tooltip(tip)
       .hover(s => s.bg(t.hover)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); action(cx); }).child(text);
-    return v_flex().id("image-window").size_full().bg(t.background).text_color(t.foreground)
+    return v_flex().id("image-window").size_full().rounded(18).overflow_hidden()
+      .border_1().border_color(t.border).shadow_lg().bg(t.background).text_color(t.foreground)
+      .track_focus(this.imageFocus).key_context("ChatImage")
+      .on_action("chat_image_close", (_event, cx) => { cx.stop_propagation(); closeOverlay(p.overlay); })
+      .on_mouse_down("left", () => this.imageFocus.focus())
       .on_mouse_down_out((_event, cx) => { cx.stop_propagation(); closeOverlay(p.overlay); })
       .child(h_flex().h(40).px(14).gap(4).items_center().flex_none()
         .child(div().flex_1().min_w(0).truncate().text_size(13).child(p.title ?? "Image"))

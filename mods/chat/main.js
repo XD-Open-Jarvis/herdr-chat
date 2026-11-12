@@ -1731,7 +1731,7 @@ export default class Chat extends View {
     const k = Math.min(1, maxW / c.w, maxH / c.h);
     return div().id(`img-${ref}`).cursor_pointer().rounded(8).overflow_hidden().border_1().border_color(t.border)
       .tooltip("View image").on_click(() => openOverlay({ mod: "chat-file", kind: "window",
-        key: `chat-image-${ref}`, width: 900, height: 680,
+        key: `chat-image-${ref}`, width: 900, height: 680, frame: "none",
         props: { image: c.rel, imageWidth: c.w, imageHeight: c.h, title: c.abs.split("/").pop() } }))
       .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)));
   }
