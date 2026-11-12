@@ -22,8 +22,10 @@ test('controller keeps busy follow-ups outside transcript until a turn is free',
  const item=chat.outbox.enqueue({text:'later',paths:['/image.png'],attachments:[{path:'/image.png'}]},context.scope);
  pump.call(chat,cx);assert.equal(tasks.length,0);assert.equal(chat.pending.length,0);
  context.status='idle';pump.call(chat,cx);assert.equal(tasks.length,1);assert.equal(chat.pending.length,1);
+ assert.equal(chat.pending[0].delivering,true);
  await tasks.shift()();assert.equal(calls[0][0],'later');assert.deepEqual(calls[0][1],['/image.png']);
  assert.equal(calls[0][3].idleOnly,true);assert.equal(chat.outbox.items.length,0);
+ assert.equal(chat.pending[0].delivering,false);
  assert.equal(chat.pending[0].id,item.id);
 });
 test('controller Send now targets the selected item, and restores it on transport failure',async()=>{
@@ -57,7 +59,7 @@ test('Enter while busy enqueues text and attachment snapshots without delivering
  attachment.name='changed';assert.equal(queued.attachments[0].name,'a.png');
 });
 const deliverySource=source.slice(source.indexOf('  async deliver('),source.indexOf('\n  // Starts one terminal'));
-const delivery=(hc,machineOf=()=>null)=>Function('hc','agentKind','machineOf','shellEscape',`return ({${deliverySource.trim()}}).deliver`)(hc,()=> 'codex',machineOf,value=>value);
+const delivery=(hc,machineOf=()=>null)=>Function('hc','exec','agentKind','machineOf','shellEscape',`return ({${deliverySource.trim()}}).deliver`)(hc,async(command,args,options)=>{assert.equal(command,'hc');assert.equal(options.timeout,180000);return hc(args);},()=> 'codex',machineOf,value=>value);
 test('automatic delivery uses an atomic idle guard; Send now uses the normal steering submission',async()=>{
  const calls=[],fn=delivery(async args=>{calls.push(args);return {code:0};});
  const chat={term:'mini/t1',terminal:()=>({status:'working'})};const cx={notify(){}};

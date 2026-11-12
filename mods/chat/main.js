@@ -1434,7 +1434,7 @@ export default class Chat extends View {
     const target = this.term;
     if (["idle", "done"].includes(context.status)) { this.stream = null; this.running = null; }
     const pending = { ...item, files: item.paths.length, users: this.userCount(),
-      afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now() };
+      afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now(), delivering: true };
     this.pending.push(pending);
     this.t?.markInput();
     cx.notify();
@@ -1447,6 +1447,7 @@ export default class Chat extends View {
         });
         if (!ok) error = this.error || "Message was not sent.";
       } catch (e) { error = String(e?.message ?? e); }
+      pending.delivering = false;
       this.outbox.finish(item.id, error);
       if (error) this.pending = this.pending.filter(message => message !== pending);
       this.saveOutbox();
@@ -1568,7 +1569,7 @@ export default class Chat extends View {
       .child(h_flex().gap(4).items_center().text_size(11.5).text_color(t.dim)
         // Codex doesn't queue: a message sent while it works goes straight into
         // the running turn as guidance, so there's nothing to send now or edit.
-        .child(div().pr(4).child(waiting && claude ? "Steering · read at its next step"
+        .child(div().pr(4).child(p.delivering ? Date.now() - p.at > 3000 ? "Waiting for terminal input…" : "Sending to terminal…" : waiting && claude ? "Steering · read at its next step"
           : !claude && (status === "working" || status === "blocked") ? "Steering · added to the running turn" : "Sending…"))
         .when(waiting && claude, (el) => el
           .child(act(`send-now-${i}`, "Send now", () => this.sendNow()))
@@ -1724,7 +1725,9 @@ export default class Chat extends View {
     const message = [...paths.map(shellEscape), text].filter(Boolean).join(" ");
     if (!message) return;
     if (options.valid && !options.valid()) throw new Error("The conversation changed; message remains queued.");
-    const r = await hc(["send", ...(options.idleOnly ? ["--if", "idle"] : []), target, message]);
+    // terminal.send may protect an unfinished TUI draft for 60 seconds.
+    // herdr.hc() has a fixed 30-second ceiling; use the configurable exec path.
+    const r = await exec("hc", ["send", ...(options.idleOnly ? ["--if", "idle"] : []), target, message], { timeout: 180000 });
     this.error = r.code === 0 ? null : r.stderr.trim() || "send failed";
     if (r.code === 0 && options.steer && agentKind(this.terminal()) === "claude"
       && this.terminal()?.status === "working" && options.valid?.()) {
