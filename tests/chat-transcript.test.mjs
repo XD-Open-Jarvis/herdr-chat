@@ -159,3 +159,22 @@ test('multiple escaped attachments are consumed, but escaped non-attachment JSON
  const entry=codex(first+' '+second+' check both')[0];assert.equal(entry.text,'check both');assert.equal(entry.images.length,2);
  const ordinary=escape(JSON.stringify({path:'/tmp/a.png',example:true}));assert.equal(codex(ordinary)[0].text,ordinary);
 });
+test('execution transport JSON is decoded into formatted command output before truncation',()=>{
+ const t=new Transcript('codex');t.toolUse('cmd','exec_command',{cmd:'git status'});
+ const output=' M main.js\n?? test.js\n[customized abc] Commit\n';
+ t.toolResult('cmd',[{type:'input_text',text:'Script completed\nWall time 0.2 seconds\nOutput:\n'},
+  {type:'input_text',text:JSON.stringify({chunk_id:'chunk',wall_time_seconds:0.2,exit_code:0,output})}],false);
+ const item=t.entries[0].items[0];assert.equal(item.result,output.trimEnd());assert.equal(item.exitCode,0);assert.equal(item.error,false);
+ assert.ok(!item.result.includes('chunk_id'));assert.ok(!item.result.includes('Script completed'));
+});
+test('decoded nonzero execution exits remain errors and escaped ANSI output is cleaned',()=>{
+ const t=new Transcript('codex');t.toolUse('cmd','exec_command',{cmd:'false'});
+ t.toolResult('cmd',JSON.stringify({chunk_id:'chunk',exit_code:1,output:'\u001b[31mfailed\u001b[0m\n'}),false);
+ const item=t.entries[0].items[0];assert.equal(item.result,'failed');assert.equal(item.error,true);assert.equal(item.exitCode,1);
+});
+test('ordinary JSON output and text resembling a transport header are preserved',async()=>{
+ const {toolOutput}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+ for(const text of ['{"output":"user data","exit_code":0}','Script completed\nOutput:\nthis is printed content'])assert.equal(toolOutput(text).text,text);
+ const pending=toolOutput(JSON.stringify({chunk_id:'chunk',session_id:42,exit_code:null,output:'starting\n'}));
+ assert.equal(pending.sessionId,42);assert.equal(pending.exitCode,null);assert.equal(pending.text,'starting');
+});

@@ -51,3 +51,8 @@ test('tool row summary formatting keeps multiline content only in the original d
  const {summaryLine}=await load('display');const text='\n\r\n  first line\r\nsecond line';
  assert.equal(summaryLine(text),'first line');assert.equal(text,'\n\r\n  first line\r\nsecond line');
 });
+test('command previews flatten script whitespace into a single readable line without changing the command',async()=>{
+ const {commandPreview}=await load('display');const command="python3 - <<'PY'\nfrom pathlib import Path\n  print('hello')\nPY";
+ assert.equal(commandPreview(command),"python3 - <<'PY' from pathlib import Path print('hello') PY");
+ assert.ok(command.includes('\n'));assert.equal(commandPreview(null),'');
+});

@@ -29,7 +29,7 @@ import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } f
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
-import { compactSettings, toolSummary, summaryLine } from "./display.js";
+import { compactSettings, toolSummary, summaryLine, commandPreview } from "./display.js";
 import { toolDetails, withChanges, changeOverview } from "./activity.js";
 import { ChatAttention } from "./attention.js";
 import { IdentifyFeedback, identifyKey } from "./identify.js";
@@ -2027,13 +2027,15 @@ export default class Chat extends View {
     const open = this.open.has(`output-${id}`);
     const shown = long && !open ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
     const escaped = shown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/\t/g, "    ").replace(/^ +/gm, spaces => "&nbsp;".repeat(spaces.length)).replace(/\n/g, "<br>");
+      .replace(/\t/g, "    ");
     const short = !long && lines.length <= 2;
     return v_flex().w_full().min_w(0).gap(4)
       .child(div().w_full().min_w(0).text_size(!framed ? 12 : short ? 12.5 : 11.5).text_color(error ? t.blocked : t.muted)
         .when(error || (!short && framed), el => el.px(12).py(8).rounded(8).bg(t.surface).border_1().border_color(error ? t.blocked : t.border))
         .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
-        .child(TextView.html(id, `<div>${escaped}</div>`).selectable(true).text_color(error ? t.blocked : t.muted)))
+        .child(TextView.html(id, `<pre>${escaped}</pre>`).selectable(true).text_color(error ? t.blocked : t.muted)
+          .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
+          .when(!framed, el => el.text_size(12).line_height("18px"))))
       .when(long, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
         .hover(style => style.text_color(t.foreground))
         .on_click((_event, cx) => { open ? this.open.delete(`output-${id}`) : this.open.add(`output-${id}`); cx.notify(); })
@@ -2146,15 +2148,19 @@ export default class Chat extends View {
     const running = last && e.items.some((i) => i.result === null) && this.terminal()?.status === "working";
     const described = e.items.map(toolDetails);
     const visible = described.filter(item => item.name !== "Wait" || item.error || item.result === null);
-    const label = toolSummary(visible.length ? visible : described, running);
+    const items = visible.length ? visible : described;
+    if (items.length === 1) return this.tool(e.key, items[0].id ?? 0, items[0], t);
+    const commands = items.every(item => item.name === "Bash" || item.name === "Wait");
+    const label = commands ? running ? "Running commands" : "Ran commands" : toolSummary(items, running);
     const failed = described.some((i) => i.error);
     const thumbs = e.items.flatMap((i) => i.images);
     return v_flex().w_full().gap(6)
       .child(h_flex().id(`tg-${e.key}`).gap(6).items_center().cursor_pointer().text_size(13).text_color(t.dim)
         .hover((s) => s.text_color(t.muted))
         .on_click((_ev, cx) => { open ? this.open.delete(e.key) : this.open.add(e.key); cx.notify(); })
-        .child(div().w(10).flex_none().child(open ? "▾" : "▸"))
-        .child(div().flex_1().min_w(0).truncate().tooltip(label).child(label))
+        .child(svg(`mods/chat/icons/${commands ? "terminal" : "edit"}.svg`).size(14).flex_none())
+        .child(div().min_w(0).truncate().child(label))
+        .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none())
         .when(running, (el) => el.child(div().flex_none().text_color(t.working).frames(SPINNER, 90)))
         .when(failed, (el) => el.child(div().flex_none().text_color(t.blocked).child("error"))))
       .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 312, 215)))))
@@ -2207,6 +2213,19 @@ export default class Chat extends View {
         .child(div().child(expanded ? "▴" : "▾"))));
   }
 
+  shellDetails(id, item, t, running) {
+    const command = typeof item.displayInput === "string" ? item.displayInput : item.input?.cmd ?? item.input?.command ?? item.summary;
+    const pendingOutput = item.sessionId != null && item.exitCode == null;
+    return v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8).rounded(12)
+      .border_1().border_color(item.error ? t.blocked : t.input).bg(t.surface)
+      .child(div().text_size(12).text_color(t.muted).child("Shell"))
+      .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false))
+      .when(Boolean(item.result?.trim()), el => el.child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false)))
+      .child(h_flex().justify_end().text_size(11.5).text_color(item.error ? t.blocked : t.dim)
+        .child(item.error ? `✕ Failed${item.exitCode != null ? ` · exit ${item.exitCode}` : ""}`
+          : running ? "Running…" : pendingOutput ? "Output pending" : item.result === null ? "Pending" : "✓ Success"));
+  }
+
   tool(key, n, i, t) {
     i = i.changes ? i : toolDetails(i);
     const id = `tool-${key}-${n}`, open = this.open.has(id);
@@ -2218,26 +2237,27 @@ export default class Chat extends View {
         .on_click((_event, cx) => { open ? this.open.delete(id) : this.open.add(id); cx.notify(); })
         .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none().text_color(t.dim))
         .child(div().flex_none().text_size(12.5).text_color(t.muted).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).tooltip(i.summary).child(summaryLine(i.summary)))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).tooltip(i.summary).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
         .when(i.changes?.length === 1 && i.changes[0].added != null && !i.error, el => el
           .child(div().text_size(11.5).text_color(t.done).child(`+${i.changes[0].added}`))
           .child(div().text_size(11.5).text_color(t.ansi1).child(`−${i.changes[0].removed ?? 0}`)))
         .when(running, el => el.child(div().text_size(12).text_color(t.dim).frames(SPINNER, 90)))
         .when(!running && (i.error || i.result === null), el => el.child(div().text_size(11).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : "Pending")))
         .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none().text_color(t.dim)))
-      .when(open && i.input != null, el => el.child(v_flex().px(12).pb(10).gap(4)
+      .when(open && i.name === "Bash", el => el.child(this.shellDetails(id, i, t, running)))
+      .when(open && i.name !== "Bash" && i.input != null, el => el.child(v_flex().px(12).pb(10).gap(4)
         .child(div().text_size(11).text_color(t.dim).child("Input"))
         .child(this.plainOutput(`${id}-input`, typeof i.displayInput === "string" ? i.displayInput
           : i.displayInput?.command ?? i.displayInput?.cmd ?? JSON.stringify(i.displayInput, null, 2), t, false, false))))
+      .when(open && i.name !== "Bash" && Boolean(i.result?.trim()), el => el.child(v_flex().px(12).pb(10).gap(4)
+        .child(div().text_size(11).text_color(t.dim).child("Output"))
+        .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
       .when(open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
         .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
           this.open.has(`raw-${id}`) ? this.open.delete(`raw-${id}`) : this.open.add(`raw-${id}`); cx.notify();
-        }, t).w_auto().self_start())
+        }, t).w_auto().self_start().bg(t.background).text_color(t.dim).px(0).py(2))
         .when(this.open.has(`raw-${id}`), row => row.child(this.plainOutput(`${id}-raw`,
           typeof i.input === "string" ? i.input : JSON.stringify(i.input, null, 2), t, false, false)))))
-      .when(open && Boolean(i.result?.trim()), el => el.child(v_flex().px(12).pb(10).gap(4)
-        .child(div().text_size(11).text_color(t.dim).child("Output"))
-        .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
       .when(i.images.length > 0, el => el.child(h_flex().px(12).pb(10).flex_wrap().gap(6)
         .children(i.images.map(image => this.img(image.ref, t, 420, 300)))));
   }

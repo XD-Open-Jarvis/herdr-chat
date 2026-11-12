@@ -48,6 +48,30 @@ export function userAttachments(text) {
   return { text: text.trim(), files };
 }
 
+// Decode only recognizable execution-transport records, never arbitrary JSON
+// printed by the user's command. Format before applying the output size limit.
+export function toolOutput(raw) {
+  let text = raw;
+  const header = /^(?:Script completed|Script running with cell ID[^\n]*|Chunk ID:[^\n]*)[\s\S]*?^Output:\r?\n/m.exec(text);
+  if (header?.index === 0 && header[0].length < 1000 && /Wall time/i.test(header[0])) text = text.slice(header[0].length).replace(/^\r?\n(?=\{)/, "");
+  let exitCode = null, sessionId = null;
+  const records = [];
+  text = text.split("\n").map(line => {
+    let record;
+    try { record = JSON.parse(line); } catch { return line; }
+    if (!record || typeof record.output !== "string" || !("chunk_id" in record || "wall_time_seconds" in record)) return line;
+    records.push(record);
+    return record.output.replace(/\n$/, "");
+  }).join("\n");
+  if (records.length) {
+    const codes = records.filter(record => Number.isInteger(record.exit_code)).map(record => record.exit_code);
+    exitCode = codes.find(code => code !== 0) ?? codes.at(-1) ?? null;
+    const sessions = [...new Set(records.map(record => record.session_id).filter(id => id != null))];
+    if (sessions.length === 1) sessionId = sessions[0];
+  }
+  return {text, exitCode, sessionId};
+}
+
 const MAX_RESULT = 6000;
 
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, "");
@@ -239,9 +263,12 @@ export class Transcript {
       if (p?.type === "image" && p.source?.data) item.images.push({ data: p.source.data, ext: extOf(p.source.media_type) });
       if (p?.type === "input_image") { const img = fromDataUrl(p.image_url); if (img) item.images.push(img); }
     }
-    const text = stripAnsi(toText(content));
+    const output = toolOutput(stripAnsi(toText(content)));
+    const text = stripAnsi(output.text);
+    item.exitCode = output.exitCode;
+    item.sessionId = output.sessionId;
     item.result = text.length > MAX_RESULT ? text.slice(0, MAX_RESULT) + "\n…" : text;
-    item.error = Boolean(error);
+    item.error = Boolean(error) || (output.exitCode != null && output.exitCode !== 0);
     this.revision++;
   }
 
