@@ -55,9 +55,16 @@ export default class Preview extends View {
   if(this.diffJump!=null){this.diffOffset=position.sizes.slice(0,this.diffJump).reduce((a,b)=>a+b,0);position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport);}
   this.diffOffset=position.offset;
   const button=(id,text,action)=>div().id(id).px(8).py(5).rounded(6).cursor_pointer().text_size(12).text_color(t.muted).hover(s=>s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
+  const toggleFile=(file,index,cx)=>{
+   if(this.diffCollapsed.has(file.path)){this.diffCollapsed.delete(file.path);this.diffHeights[index]=undefined;}
+   else{this.diffCollapsed.add(file.path);this.diffHeights[index]=FILE_HEADER;}
+   this.diffJump=null;
+   cx.notify();
+  };
   const header=(file,index,sticky=false)=>h_flex().h(FILE_HEADER).flex_none().w_full().px(12).gap(8).items_center().bg(t.background).border_b(1).border_color(t.border)
-   .cursor_pointer().on_click((_event,cx)=>{if(this.diffCollapsed.has(file.path)){this.diffCollapsed.delete(file.path);this.diffHeights[index]=undefined;}else{this.diffCollapsed.add(file.path);this.diffHeights[index]=FILE_HEADER;}cx.notify();})
+   .cursor_pointer().on_click((_event,cx)=>toggleFile(file,index,cx))
    .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(file.path)
+    .cursor_pointer().on_click((event,cx)=>{event.stop_propagation();toggleFile(file,index,cx);})
     .child(`${this.diffCollapsed.has(file.path)?'▸':'▾'} ${file.path.split(/[\\/]/).at(-1)}`))
    .when(file.added!=null,el=>el.child(div().text_size(12).text_color(t.ansi2).child(`+${file.added}`)))
    .when(file.removed!=null,el=>el.child(div().text_size(12).text_color(t.ansi1).child(`−${file.removed}`)))
@@ -78,7 +85,8 @@ export default class Preview extends View {
    .on_size_change((size,cx)=>{if(this.diffViewport!==size.height){this.diffViewport=size.height;cx.notify();}})
    .on_scroll_wheel((event,cx)=>{cx.stop_propagation();this.diffJump=null;const next=collectionPosition(files,this.diffHeights,this.diffOffset-event.delta.y,this.diffViewport);if(next.offset!==this.diffOffset){this.diffOffset=next.offset;cx.notify();}})
    .child(content)
-   .child(div().absolute().left(0).right(0).top(position.headerTop).child(header(files[position.index],position.index,true)));
+   .when(position.offset>position.sizes.slice(0,position.index).reduce((a,b)=>a+b,0)+1,
+    el=>el.child(div().absolute().left(0).right(0).top(position.headerTop).child(header(files[position.index],position.index,true))));
   if(position.total>this.diffViewport){const height=Math.max(24,this.diffViewport*this.diffViewport/position.total);viewport.child(div().absolute().right(2).top(position.offset/(position.total-this.diffViewport)*(this.diffViewport-height)).w(4).h(height).rounded(2).bg(t.input));}
   return v_flex().size_full().min_w(0).min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border)
    .child(h_flex().h(34).flex_none().px(10).items_center().border_b(1).border_color(t.border)
