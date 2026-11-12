@@ -3,7 +3,6 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 const load=async path=>import('data:text/javascript;base64,'+Buffer.from(readFileSync(new URL(path,import.meta.url),'utf8')).toString('base64'));
 const {collectionPosition}=await load('../mods/chat-preview/collection.js');
-const {diffBlocks}=await load('../mods/chat-preview/diff.js');
 const {sidebarVisible,hoverGeometry}=await load('../mods/chat/hover-diff.js');
 const files=[{path:'one.js',diff:'-a\n+b'},{path:'two.js',diff:'+c'},{path:'three.js',diff:'+d'}];
 test('the current filename remains pinned until the next file header pushes it out',()=>{
@@ -33,13 +32,4 @@ test('a visible right sidebar suppresses hover previews regardless of its select
  assert.equal(sidebarVisible({id:'root',children:[{id:'panel',hidden:true}]}),false);
  assert.equal(sidebarVisible({id:'root',children:[{id:'panel',hidden:false}]}),true);
  assert.equal(sidebarVisible({id:'root'}),false);
-});
-test('diff blocks preserve recorded old and new line numbers without inventing missing ones',()=>{
- const file={path:'main.js',diff:'@@ -2000,3 +2000,4 @@\n context\n-old code\n+new code\n+another line\n next'};
- const blocks=diffBlocks(file);
- assert.deepEqual(blocks.map(block=>[block.kind,block.numbers,block.code]),[
-  ['context',['2000'],['context']],['removed',['2001'],['old code']],
-  ['added',['2001','2002'],['new code','another line']],['context',['2003'],['next']]
- ]);
- assert.equal(diffBlocks({path:'main.js',diff:'-old\n+new'}).find(block=>block.kind==='removed').numbers[0],'');
 });

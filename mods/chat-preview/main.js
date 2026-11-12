@@ -3,8 +3,9 @@ import {h_flex,v_flex,Editor,EditorState,TextView} from "gpui-base";
 import {shared,setShared,theme,settings,spaces,panes,focused,layout,readTextFile,run} from "herdr";
 import {previewPane,previewKey,fileLink} from "./preview.js";
 import {collectionPosition,FILE_HEADER} from "./collection.js";
-import {renderDiffBlocks} from "./diff-render.js";
+import {diffLines,diffGroups} from "./diff.js";
 const LANG={md:"markdown",markdown:"markdown",json:"json",js:"javascript",mjs:"javascript",jsx:"javascript",ts:"typescript",tsx:"typescript",py:"python",rs:"rust",go:"go",sh:"bash",yaml:"yaml",yml:"yaml",toml:"toml",html:"html",css:"css"};
+const escape=text=>text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 export default class Preview extends View {
  init(){this.generation=0;this.loaded=null;this.code=null;this.text=null;this.error=null;this.diffCollapsed=new Set();}
  current(){
@@ -36,8 +37,11 @@ export default class Preview extends View {
  }
  update(key,patch){const pages=shared("chat.preview")??{};if(pages[key])setShared("chat.preview",{...pages,[key]:{...pages[key],...patch}});}
  diff(request,t){
+  const colors={added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
   return v_flex().id(`preview-diff-${request.revision}`).flex_1().min_h(0).overflow_y_scrollbar().py(12)
-   .children(renderDiffBlocks(request.change,`sidebar-diff-${request.revision}`,t,settings().font_family));
+   .children(diffGroups(diffLines(request.change)).map((group,i)=>div().px(12).w_full().min_w(0)
+    .child(TextView.html(`sidebar-diff-${request.revision}-${i}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px")
+     .text_color(colors[group.kind]).when(Boolean(settings().font_family),el=>el.font_family(settings().font_family)))));
  }
  diffCollection(request,t,key) {
   const identity=`${key}:${request.revision}`;
@@ -67,21 +71,24 @@ export default class Preview extends View {
    this.diffJump=null;
    cx.notify();
   };
-  const header=(file,index,sticky=false)=>h_flex().h(FILE_HEADER).flex_none().w_full().px(12).gap(8).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+  const header=(file,index,sticky=false)=>h_flex().h(FILE_HEADER).flex_none().w_full().px(12).gap(8).items_center().bg(t.background).border_b(1).border_color(t.border)
    .cursor_pointer().on_click((_event,cx)=>toggleFile(file,index,cx))
    .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(file.path)
     .cursor_pointer().on_click((event,cx)=>{event.stop_propagation();toggleFile(file,index,cx);})
-    .child(`${this.diffCollapsed.has(file.path)?'▸':'▾'} ${file.path}`))
+    .child(`${this.diffCollapsed.has(file.path)?'▸':'▾'} ${file.path.split(/[\\/]/).at(-1)}`))
    .when(file.added!=null,el=>el.child(div().text_size(12).text_color(t.ansi2).child(`+${file.added}`)))
    .when(file.removed!=null,el=>el.child(div().text_size(12).text_color(t.ansi1).child(`−${file.removed}`)))
    .child(button(`collection-file-${sticky?'sticky':index}`,"File",(event,cx)=>{event.stop_propagation();this.update(key,{file:file.file??file.path,change:file,mode:"source"});}));
+  const colors={added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
   const content=v_flex().absolute().left(0).right(0).top(-position.offset)
    .children(files.map((file,index)=>{
     const row=v_flex().w_full().min_w(0)
      .on_size_change((size,cx)=>{if(this.diffHeights[index]!==size.height){this.diffHeights[index]=size.height;cx.notify();}})
      .child(header(file,index));
     if(!this.diffCollapsed.has(file.path))row.child(v_flex().py(12).gap(0)
-     .children(renderDiffBlocks(file,`collection-${identity}-${index}`,t,settings().font_family)));
+     .children(diffGroups(diffLines(file)).map((group,i)=>div().px(12).w_full().min_w(0)
+      .child(TextView.html(`collection-${identity}-${index}-${i}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
+       .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
     return row;
    }))
    .child(div().h(trailing).flex_none());
