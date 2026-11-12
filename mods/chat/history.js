@@ -5,7 +5,8 @@ import { exec } from "herdr";
 export const HISTORY_PY = `
 import json, pathlib, sys
 root = pathlib.Path.home() / ".codex" / "sessions"
-limit = 4 * 1024 * 1024
+limit = int(sys.argv[2]) if len(sys.argv) > 2 else 4 * 1024 * 1024
+if limit <= 0: raise ValueError("Invalid history limit")
 seen = set()
 index = None
 def inherited(path, bound=None):
@@ -77,8 +78,34 @@ print(json.dumps({"lines": b"".join(reversed(chunks)).decode("utf-8").splitlines
                   "truncated": truncated}))
 `;
 
-export async function inheritedHistory(file, on) {
-  const result = await exec("python3", ["-c", HISTORY_PY, file], { on });
+export async function inheritedHistory(file, on, bytes = 4 * 1024 * 1024) {
+  const result = await exec("python3", ["-c", HISTORY_PY, file, String(bytes)], { on });
   if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read inherited conversation");
   return JSON.parse(result.stdout);
+}
+
+// Rebuilding a larger log suffix must retain existing message/tool anchors.
+export function rebaseHistory(previous, next, pending, generation) {
+  const signature = entry => JSON.stringify([entry.kind, entry.text, entry.items?.map(item => item.id)]);
+  const positions = new Map();
+  next.entries.forEach((entry, index) => {
+    const key = signature(entry);
+    if (!positions.has(key)) positions.set(key, []);
+    positions.get(key).push(index);
+    entry.key = `history-${generation}-${index}`;
+  });
+  let cursor = 0, prefixUsers = null, previousUsers = 0;
+  for (const entry of previous.entries) {
+    const usersBefore = previousUsers;
+    if (entry.kind === "user") previousUsers++;
+    const candidates = positions.get(signature(entry));
+    while (candidates?.length && candidates[0] < cursor) candidates.shift();
+    if (!candidates?.length) continue;
+    const index = candidates.shift();
+    if (prefixUsers == null) prefixUsers = Math.max(0, next.entries.slice(0, index).filter(item => item.kind === "user").length - usersBefore);
+    next.entries[index].key = entry.key;
+    cursor = index + 1;
+  }
+  for (const message of pending) message.users += prefixUsers ?? 0;
+  next.breakAfter = previous.breakAfter;
 }

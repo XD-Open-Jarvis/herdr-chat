@@ -13,7 +13,7 @@ import * as fs from "fs/promises";
 import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import { Transcript } from "./parse.js";
-import { inheritedHistory } from "./history.js";
+import { inheritedHistory, rebaseHistory } from "./history.js";
 import { folderPoll } from "./poll.js";
 import { ownerPane, qualifyAddress, chatProps } from "./identity.js";
 import { openChat as openConversation, showTerminal, presentationPane, presentationVisible, presentationLayoutReady } from "./presentation.js";
@@ -1345,31 +1345,68 @@ export default class Chat extends View {
     hc(["keys", this.term, ...choose(q.selected, yes)]);
   }
 
-  start(file, on, kind, cx) {
+  loadEarlier(cx) {
+    if (this.historyLoading || !this.file || !this.t) return;
+    this.start(this.file, machineOf(this.term), this.t.kind, cx, (this.historyBytes ?? 4 * 1024 * 1024) + 4 * 1024 * 1024);
+    cx.notify();
+  }
+
+  start(file, on, kind, cx, moreBytes = null) {
     const gen = ++this.gen;
+    const previous = moreBytes ? this.t : null;
+    const previousTail = moreBytes && this.historyTail ? new Tail(file, on, this.historyBytes) : null;
+    if (previousTail) {
+      previousTail.offset = this.historyTail.offset;
+      previousTail.truncated = this.historyTail.truncated;
+    }
+    this.historyLoading = Boolean(moreBytes);
     this.file = file;
-    this.t = new Transcript(kind);
-    this.limit = PAGE;
-    this.off = 0;
+    if (!previous) {
+      this.t = new Transcript(kind);
+      this.limit = PAGE;
+      this.off = 0;
+      this.historyBytes = 4 * 1024 * 1024;
+      this.truncated = false;
+    }
     this.error = null;
-    const tail = new Tail(file, on);
+    let tail = new Tail(file, on, moreBytes ?? this.historyBytes);
+    this.historyTail = tail;
     const dir = file.slice(0, file.lastIndexOf("/"));
     const waitForChange = folderPoll(watchFolder, cx.timer, dir);
     cx.spawn(async (cx) => {
-      if (kind === "codex") {
-        try {
-          const initial = await inheritedHistory(file, on);
+      try {
+        let lines;
+        if (kind === "codex") {
+          const initial = await inheritedHistory(file, on, moreBytes ?? this.historyBytes);
           if (gen !== this.gen) return;
           tail.offset = initial.offset;
           tail.truncated = initial.truncated;
-          this.truncated = initial.truncated;
-          for (const line of initial.lines) this.t.feed(line);
-          this.grew = true;
-          if (this.chatVisible()) { this.cacheShown(cx); cx.notify(); }
-        } catch (error) {
-          if (gen === this.gen) { this.error = String(error?.message ?? error); cx.notify(); }
-          return;
+          lines = initial.lines;
+        } else {
+          lines = await tail.read();
+          if (gen !== this.gen) return;
         }
+        const transcript = previous ? new Transcript(kind) : this.t;
+        for (const line of lines) transcript.feed(line);
+        if (previous) {
+          rebaseHistory(previous, transcript, this.pending, gen);
+          this.t = transcript;
+          this.limit += PAGE;
+          this.earlier = true;
+          this.historyBytes = moreBytes;
+        }
+        this.truncated = tail.truncated;
+        this.historyLoading = false;
+        this.grew = true;
+        if (this.chatVisible()) { this.cacheShown(cx); cx.notify(); }
+      } catch (error) {
+        if (gen !== this.gen) return;
+        this.historyLoading = false;
+        this.error = String(error?.message ?? error);
+        cx.notify();
+        if (!previousTail) return;
+        tail = previousTail;
+        this.historyTail = tail;
       }
       while (gen === this.gen) {
         if (!this.chatVisible()) { await sleep(cx, 1000); continue; }
@@ -2426,7 +2463,9 @@ export default class Chat extends View {
           .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { this.earlier = true; this.limit += PAGE; this.cacheShown(cx); cx.notify(); })
           .child(`Show earlier (${start})`))))
       .when(start === 0 && Boolean(this.truncated), (el) => el.child(h_flex().w_full().justify_center()
-        .child(div().text_size(11.5).text_color(t.dim).child("Older history is in the log but not loaded"))))
+        .child(div().id("load-earlier-history").px(10).py(4).rounded(8).cursor_pointer().bg(t.surface).text_size(12).text_color(t.muted)
+          .hover(style => style.bg(t.hover)).on_click((_e, cx) => this.loadEarlier(cx))
+          .child(this.historyLoading ? "Loading earlier history…" : "Load earlier history"))))
       .children(withPending(shown, this.pending).map((entry, index, entries) => {
         const previous = entries[index - 1];
         const tight = previous && ((["assistant", "tools"].includes(previous.kind) && ["assistant", "tools"].includes(entry.kind)) || entry.kind === "changes");

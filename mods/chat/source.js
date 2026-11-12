@@ -44,7 +44,8 @@ export async function locate(term, kind) {
 
 // Reads complete new lines from `file` since the last call.
 export class Tail {
-  constructor(file, on) {
+  constructor(file, on, bytes = TAIL_BYTES) {
+    this.bytes = bytes;
     this.file = file;
     this.on = on;
     this.offset = null;
@@ -55,7 +56,7 @@ export class Tail {
     if (this.offset === null) {
       const r = await sh('wc -c < "$1"', [this.file], this.on);
       const size = parseInt(r.stdout.trim(), 10) || 0;
-      this.offset = Math.max(0, size - TAIL_BYTES);
+      this.offset = Math.max(0, size - this.bytes);
       skipFirst = this.offset > 0;
       this.truncated = skipFirst;
     }
