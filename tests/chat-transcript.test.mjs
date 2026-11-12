@@ -106,3 +106,16 @@ test('tool input remains available in expandable details',()=>{
  const t=new Transcript('codex');t.toolUse('tool1','exec_command',JSON.stringify({cmd:'printf "hello"'}));
  assert.equal(t.entries[0].items[0].input.cmd,'printf "hello"');
 });
+test('Claude settings confirmation is a subdued notice with its full detail preserved',()=>{
+ const t=new Transcript('claude');t.user('<command-name>/effort</command-name><command-args>low</command-args>');
+ const text='Set effort level to low (saved as your default for new sessions): Quick, straightforward implementation with minimal overhead';
+ t.user(`<local-command-stdout>${text}</local-command-stdout>`);
+ assert.equal(t.entries[1].kind,'notice');assert.equal(t.entries[1].event,'settings_changed');
+ assert.equal(t.entries[1].text,'Set effort level to low (saved as your default for new sessions)');assert.equal(t.entries[1].detail,text);
+});
+test('setting errors and ordinary command output are not demoted to settings notices',()=>{
+ for(const [command,text] of [['/effort bad','Invalid effort value'],['/model unknown','Error: unknown model'],['/help','Set effort level to low']]){
+  const t=new Transcript('claude');t.user(`<command-name>${command}</command-name>`);t.user(`<local-command-stdout>${text}</local-command-stdout>`);assert.equal(t.entries[1].kind,'output');
+ }
+ const t=new Transcript('claude');t.user('<command-name>/effort low</command-name>');t.user('<local-command-stderr>Something went wrong</local-command-stderr>');assert.equal(t.entries[1].kind,'output');
+});

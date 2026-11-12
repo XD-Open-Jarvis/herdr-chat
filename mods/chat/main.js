@@ -1765,7 +1765,8 @@ export default class Chat extends View {
       const at = new Date(e.timestamp);
       const time = Number.isFinite(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : null;
       return h_flex().w_full().gap(8).py(2).items_center().text_size(11.5).text_color(t.dim)
-        .child(div().child(e.text)).when(Boolean(time), el => el.child(div().child(`· ${time}`)));
+        .child(div().min_w(0).tooltip(e.detail ?? e.text).child(e.text))
+        .when(Boolean(time), el => el.child(div().flex_none().child(`· ${time}`)));
     }
     if (e.kind === "card") return this.card(e, t);
     if (e.kind === "output") return this.plainOutput(`out-${e.key}`, e.text, t);

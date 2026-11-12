@@ -125,7 +125,15 @@ export class Transcript {
     if (out) {
       const o = stripAnsi(out[1]).trim();
       if (/^Compacted\b/.test(o) && this.entries.some((e) => e.compact)) return;
-      if (o) this.push({ kind: "output", text: o });
+      if (o) {
+        const command = this.last();
+        const settings = command?.command && /^\/(?:effort|model|fast|permissions|config|settings|vim|theme|output-style|color)(?:\s|$)/.test(command.text);
+        const failure = /<local-command-stderr>/.test(text) || /\b(error|failed|invalid|unknown|unsupported|unable|cannot|couldn't|warning)\b/i.test(o);
+        if (settings && !failure && o.split("\n").length <= 2) {
+          const effort = /^(Set effort level to \S+(?:\s+\([^)]*\))?)(?::|$)/.exec(o);
+          this.push({ kind: "notice", event: "settings_changed", text: effort?.[1] ?? o, detail: o });
+        } else this.push({ kind: "output", text: o });
+      }
       return;
     }
     if (/^<local-command-caveat>/.test(text)) return;
