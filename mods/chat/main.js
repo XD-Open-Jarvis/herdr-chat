@@ -1413,6 +1413,9 @@ export default class Chat extends View {
   }
 
   saveOutbox() {
+    if (!this.outbox.items.length) {
+      this.outboxExpanded = false; this.outboxHovered = null; this.outboxHeight = null; this.outboxOffset = 0;
+    }
     const value = JSON.stringify(this.outbox);
     if (value !== this.savedOutbox) {
       localStorage.setItem("outbox-v1", value);
@@ -1451,41 +1454,57 @@ export default class Chat extends View {
 
   outboxView(t) {
     if (!this.outbox.items.length) return null;
-    const scope = this.queueContext().scope;
-    const height = Math.min(240, this.outboxHeight ?? this.outbox.items.length * 100);
+    const context = this.queueContext();
+    const height = Math.min(240, this.outboxHeight ?? this.outbox.items.length * 80);
     const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
-    return h_flex().w_full().justify_center().child(div().id("outbox-scroll").w_full().max_w(900)
-      .h(height).flex_none().relative().overflow_hidden()
-      .on_scroll_wheel((e, cx) => {
-        this.outboxOffset = Math.max(0, Math.min(offset - e.delta.y, (this.outboxHeight ?? height) - height));
-        cx.stop_propagation(); cx.notify();
-      })
-      .child(v_flex().absolute().left(0).right(0).top(-offset).items_end().gap(8)
-        .on_size_change((size, cx) => {
-          if (Math.abs(size.height - (this.outboxHeight ?? 0)) > 0.5) {
-            this.outboxHeight = size.height; cx.notify();
-          }
+    return h_flex().w_full().justify_center().child(v_flex().id("outbox").w_full().max_w(900)
+      .rounded(12).border_1().border_color(t.border).bg(t.surface).overflow_hidden()
+      .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
+        .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.bg(t.hover))
+        .tooltip(this.outboxExpanded ? "Collapse queued messages" : "Expand queued messages")
+        .on_click((_e, cx) => { this.outboxExpanded = !this.outboxExpanded; this.outboxHovered = null; cx.notify(); })
+        .child(`${this.outbox.items.length} queued`)
+        .child(div().text_size(11).child(this.outboxExpanded ? "▴" : "▾")))
+      .when(Boolean(this.outboxExpanded), el => el.child(div().id("outbox-scroll").w_full()
+        .h(height).flex_none().relative().overflow_hidden().border_t(1).border_color(t.border)
+        .on_scroll_wheel((e, cx) => {
+          this.outboxOffset = Math.max(0, Math.min(offset - e.delta.y, (this.outboxHeight ?? height) - height));
+          cx.stop_propagation(); cx.notify();
         })
-        .children(this.outbox.items.map((item, index) => {
-          const paused = scope !== item.scope;
-          const unavailable = paused || !["idle", "done", "working"].includes(this.queueContext().status);
-          return v_flex().id(`outbox-${item.id}`).w_auto()
-            .max_w(Math.max(180, Math.min(900, this.width - 32) * 0.7)).flex_none().gap(5).px(12).py(9)
-            .rounded(12).border_1().border_color(t.border).bg(t.surface)
-            .child(h_flex().gap(8).items_center().text_size(11).text_color(t.muted)
-              .child(div().flex_1().min_w(0).child(paused ? "Paused · different session" : item.state === "sending" ? "Sending…" : `Queued · ${index + 1}`))
-              .when(item.state !== "sending", el => el
-                .child(this.button(`outbox-send-${item.id}`, "Send now", (_e, cx) => this.pumpOutbox(cx, item.id), t)
-                  .when(unavailable, button => button.opacity(0.4))
-                  .tooltip(paused ? "Return to this session to send" : unavailable ? "Resolve the agent prompt before sending" : "Send this message now"))
-                .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).tooltip("Remove queued message")
-                  .on_click((_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }).child("×"))))
-            .when(Boolean(item.text), el => el.child(div().text_size(13).child(item.text)))
-            .when(item.attachments.length > 0, el => el.child(h_flex().gap(6).flex_wrap()
-              .children(item.attachments.map(file => file.image ? this.img(file.image.ref, t, 96, 64)
-                : div().text_size(11).text_color(t.muted).child(file.name)))))
-            .when(Boolean(item.error), el => el.child(div().text_size(11).text_color(t.blocked).child(item.error)));
-        }))));
+        .child(v_flex().absolute().left(0).right(0).top(-offset)
+          .on_size_change((size, cx) => {
+            if (Math.abs(size.height - (this.outboxHeight ?? 0)) > 0.5) {
+              this.outboxHeight = size.height; cx.notify();
+            }
+          })
+          .children(this.outbox.items.map((item, index) => {
+            const paused = context.scope !== item.scope;
+            const unavailable = paused || !["idle", "done", "working"].includes(context.status);
+            const hovered = this.outboxHovered === item.id;
+            return h_flex().id(`outbox-${item.id}`).w_full().flex_none().px(12).py(10).gap(10).items_center()
+              .when(index > 0, row => row.border_t(1).border_color(t.border))
+              .on_hover((on, cx) => {
+                if (on) this.outboxHovered = item.id;
+                else if (this.outboxHovered === item.id) this.outboxHovered = null;
+                cx.notify();
+              })
+              .child(v_flex().flex_1().min_w(0).items_end().gap(4)
+                .when(Boolean(item.text), row => row.child(div().text_right().text_size(13).child(item.text)))
+                .when(item.attachments.length > 0, row => row.child(h_flex().gap(6).flex_wrap().justify_end()
+                  .children(item.attachments.map(file => file.image ? this.img(file.image.ref, t, 96, 64)
+                    : div().text_size(11).text_color(t.muted).child(file.name)))))
+                .when(paused || item.state === "sending", row => row.child(div().text_size(11).text_color(t.dim)
+                  .child(paused ? "Paused · different session" : "Sending…")))
+                .when(Boolean(item.error), row => row.child(div().text_right().text_size(11).text_color(t.blocked).child(item.error))))
+              // Reserve the action gutter so hover never reflows the message.
+              .child(h_flex().w(90).flex_none().gap(4).items_center().justify_end()
+                .when(hovered && item.state !== "sending", row => row
+                  .child(this.button(`outbox-send-${item.id}`, "Instant", (_e, cx) => this.pumpOutbox(cx, item.id), t)
+                    .when(unavailable, button => button.opacity(0.4))
+                    .tooltip(paused ? "Return to this session to send" : unavailable ? "Resolve the agent prompt before sending" : "Send this message now"))
+                  .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).text_color(t.muted).tooltip("Remove queued message")
+                    .on_click((_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }).child("×"))));
+          }))))));
   }
 
   userCount() {
