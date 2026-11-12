@@ -37,3 +37,27 @@ test('ordinary messages, literal inline hc tags and images are preserved',()=>{
 test('system reminders inside transported input stay hidden',()=>{
   assert.equal(codex('<hc from="t1"><system-reminder>internal</system-reminder>hello</hc>')[0].text,'hello');
 });
+test('hc image descriptors become previews before cleaned text',()=>{
+ const e=codex('<hc from="mini/t1">\\{"bytes":43006,"path":"/tmp/paste.png"\\} 请看这张图</hc>')[0];
+ assert.equal(e.text,'请看这张图');assert.equal(e.images[0].path,'/tmp/paste.png');assert.equal(e.from,'mini/t1');
+});
+test('multiple file descriptors become image previews and attachment cards',()=>{
+ const e=codex('{"bytes":10,"path":"/tmp/a.png"} {"bytes":1024,"path":"/tmp/report.pdf"} 正文')[0];
+ assert.equal(e.text,'正文');assert.equal(e.images.length,1);assert.equal(e.files.length,1);assert.equal(e.files[0].name,'report.pdf');
+});
+test('attachment-only messages remain visible without an empty text bubble',()=>{
+ const e=codex('{"bytes":1024,"path":"/tmp/report.pdf"}')[0];
+ assert.equal(e.text,'');assert.equal(e.files.length,1);
+});
+test('Claude uses the same transported attachment parser',()=>{
+ const t=new Transcript('claude');t.user('<hc>{"bytes":10,"path":"/tmp/a.png"} hello</hc>');
+ assert.equal(t.entries[0].text,'hello');assert.equal(t.entries[0].images.length,1);
+});
+test('ordinary JSON examples and malformed descriptors remain text',()=>{
+ for(const text of ['Example: {"bytes":10,"path":"/tmp/a.png"}','```json\n{"bytes":10,"path":"/tmp/a.png"}\n```','{"bytes":"bad","path":"/tmp/a.png"}','{"path":"/tmp/a.png"}','{"bytes":10,"path":"https://example.com/a.png"}'])assert.equal(codex(text)[0].text,text);
+});
+test('native image blocks and their hc descriptors show the image once',()=>{
+ const t=new Transcript('codex');
+ t.feed(JSON.stringify({type:'response_item',payload:{type:'message',role:'user',content:[{type:'input_text',text:'{"bytes":10,"path":"/tmp/a.png"} hello'},{type:'input_image',image_url:'data:image/png;base64,YWJj'}]}}));
+ assert.equal(t.entries[0].images.length,1);assert.equal(t.entries[0].images[0].data,'YWJj');assert.equal(t.entries[0].text,'hello');
+});

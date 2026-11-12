@@ -11,6 +11,24 @@ export function hcMessage(text) {
   return { text: match[2].trim(), from };
 }
 
+// hc prepends file descriptors to the person's text. Consume only valid
+// leading transport records; JSON examples in prose/code remain untouched.
+export function userAttachments(text) {
+  const files = [];
+  for (;;) {
+    const match = /^\s*(\\?\{[^\r\n]*?\\?\})/.exec(text);
+    if (!match) break;
+    let file;
+    try { file = JSON.parse(match[1].replace(/\\([{}])/g, "$1")); } catch { break; }
+    if (!file || typeof file.path !== "string" || !/^(?:\/|[A-Za-z]:[\\/])/.test(file.path)
+      || !Number.isFinite(file.bytes) || file.bytes < 0
+      || Object.keys(file).some(key => !["path", "bytes", "name", "mime", "type"].includes(key))) break;
+    files.push({ path: file.path, bytes: file.bytes, name: file.name || file.path.split(/[\\/]/).pop() });
+    text = text.slice(match[0].length).trimStart();
+  }
+  return { text: text.trim(), files };
+}
+
 const MAX_RESULT = 6000;
 
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, "");
@@ -108,8 +126,21 @@ export class Transcript {
     if (/^\[Request interrupted/.test(text)) return this.note("Interrupted");
     // Other tag-wrapped injections (task notifications, environment context).
     if (/^<([a-z_-]+)[^>]*>[\s\S]*<\/\1>$/.test(text)) return;
-    if (!text && !images.length) return;
-    this.push({ kind: "user", text, images, ...(incoming.from ? { from: incoming.from } : {}) });
+    const attached = userAttachments(text);
+    text = attached.text;
+    const files = [];
+    images = [...images];
+    const describedImages = attached.files.filter(file => /\.(png|jpe?g|gif|webp|bmp|tiff?|heic)$/i.test(file.path));
+    // Codex may supply both the hc descriptor and the same ordered image
+    // blocks. Prefer those blocks (also usable remotely) instead of doubling.
+    const alreadyEmbedded = images.length === describedImages.length && images.every(image => image.data);
+    for (const file of attached.files) {
+      if (/\.(png|jpe?g|gif|webp|bmp|tiff?|heic)$/i.test(file.path)) {
+        if (!alreadyEmbedded && !images.some(image => image.path === file.path)) images.push(file);
+      } else if (!files.some(existing => existing.path === file.path)) files.push(file);
+    }
+    if (!text && !images.length && !files.length) return;
+    this.push({ kind: "user", text, images, files, ...(incoming.from ? { from: incoming.from } : {}) });
   }
 
   // The context card, in place of the terminal's drawing of the same numbers.

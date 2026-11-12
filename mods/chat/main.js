@@ -1429,12 +1429,17 @@ export default class Chat extends View {
     img.ref ??= img.data ? hash(img.data.slice(0, 8192) + img.data.length) : hash(img.path);
     if (this.images[img.ref]) return;
     this.images[img.ref] = "pending";
+    const on = machineOf(this.term);
     cx.spawn(async (cx) => {
       try {
         const ext = img.ext ?? (img.path.split(".").pop() || "png").toLowerCase();
         const rel = `${CACHE}/${img.ref}.${ext}`, abs = `${appHome()}/${rel}`;
         if (img.data) await fs.writeFile(abs, Buffer.from(img.data, "base64"));
-        else if ((await exec("cp", [img.path, abs])).code !== 0) throw new Error("copy failed");
+        else if (on) {
+          const result = await exec("sh", ["-c", 'base64 < "$1"', "sh", img.path], { on });
+          if (result.code !== 0) throw new Error("copy failed");
+          await fs.writeFile(abs, Buffer.from(result.stdout, "base64"));
+        } else if ((await exec("cp", [img.path, abs])).code !== 0) throw new Error("copy failed");
         const { w, h } = (await imageSize(abs)) ?? { w: 320, h: 240 };
         this.images[img.ref] = { rel, abs, w, h };
       } catch {
@@ -1680,9 +1685,16 @@ export default class Chat extends View {
       const on = this.hovered === e.key && Boolean(e.text);
       return v_flex().id(`row-${e.key}`).w_full().items_end().gap(4).on_hover(this.hover(e.key))
         .when(Boolean(e.from), (el) => el.child(div().text_size(11).text_color(t.dim).child(`hc · ${e.from}`)))
-        .child(v_flex().w_auto().max_w(max).min_w(0).flex_none().gap(8).px(14).py(10).rounded(14).bg(t.raised)
-          .when(e.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(e.images.map((i) => this.img(i.ref, t, 420, 300)))))
-          .when(Boolean(e.text), (el) => el.child(this.markdown(e.key, emojify(e.text)))))
+        .when(e.images.length > 0, el => el.child(h_flex().max_w(max).flex_wrap().justify_end().gap(6)
+          .children(e.images.map(i => this.img(i.ref, t, Math.min(420, max), 300)))))
+        .when(Boolean(e.files?.length), el => el.child(h_flex().max_w(max).flex_wrap().justify_end().gap(6)
+          .children(e.files.map(file => h_flex().max_w(max).min_w(0).gap(8).px(12).py(8).rounded(8).bg(t.raised).tooltip(file.path)
+            .child(svg("mods/chat/icons/attachment.svg").size(16).flex_none().text_color(t.muted))
+            .child(v_flex().min_w(0).gap(2)
+              .child(div().truncate().text_size(12).child(file.name))
+              .child(div().text_size(10.5).text_color(t.dim).child(file.bytes < 1024 ? `${file.bytes} B` : `${Math.round(file.bytes / 1024)} KB`)))))))
+        .when(Boolean(e.text), el => el.child(v_flex().w_auto().max_w(max).min_w(0).flex_none().px(14).py(10).rounded(14).bg(t.raised)
+          .child(this.markdown(e.key, emojify(e.text)))))
         .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
           .child(this.tinyButton(`edit-${e.key}`, "edit", "Edit and send again", (_e, cx) => { this.input.set_value(""); this.input.replace(e.text); this.input.focus(); cx.notify(); }, t))));
@@ -2115,8 +2127,8 @@ export default class Chat extends View {
         .when(Boolean(chosen?.hint), (r) => r.child(div().flex_none().child(chosen.hint)))
         .child(div().flex_1().min_w(0).truncate().child(chosen?.desc ?? ""))))
       .child(h_flex().px(8).pb(8).gap(4).items_center()
-        .child(icon("attach", "+", (_e, cx) => this.pickFiles(cx)))
-        .child(icon("emoji", "☺", (_e, cx) => { this.showEmoji = !this.showEmoji; cx.notify(); }, this.showEmoji))
+        .child(icon("attach", svg("mods/chat/icons/attachment.svg").size(16), (_e, cx) => this.pickFiles(cx)).tooltip("Attach files"))
+        .child(icon("emoji", "☺", (_e, cx) => { this.showEmoji = !this.showEmoji; cx.notify(); }, this.showEmoji).tooltip("Insert emoji"))
         .child(div().flex_1())
         .when(!this.dialog && Boolean(this.term), (el) => el.child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
         .child(div().id("send").flex_none().size(32).rounded_full().flex().items_center().justify_center().cursor_pointer()
