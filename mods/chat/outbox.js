@@ -15,10 +15,13 @@ export class Outbox {
     this.observe(context);
     return Boolean(context.scope) && ["idle", "done"].includes(context.status)
       && this.gate?.scope !== context.scope
-      && !this.items.some(item => item.scope === context.scope || item.state === "sending");
+      && !this.items.some(item => (item.scope === context.scope && !(item.direct && item.state === "error")) || item.state === "sending");
   }
   get visibleItems() {
-    return this.items.filter(item => !(item.direct && item.state === "sending"));
+    return this.items.filter(item => !(item.direct && ["sending", "error"].includes(item.state)));
+  }
+  get failedItems() {
+    return this.items.filter(item => item.direct && item.state === "error");
   }
   enqueue(message, scope) {
     const item = { ...message, scope, id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, state: "queued" };
@@ -36,7 +39,7 @@ export class Outbox {
     if (!context.scope || this.items.some(item => item.state === "sending")) return null;
     if (!["idle", "done", "working", ...(id ? ["error"] : [])].includes(context.status)) return null;
     const item = id ? this.items.find(item => item.id === id)
-      : this.items.find(item => item.scope === context.scope);
+      : this.items.find(item => item.scope === context.scope && !(item.direct && item.state === "error"));
     if (!item || item.scope !== context.scope || item.state === "sending") return null;
     if (!id && ((this.gate?.scope === context.scope) || item.state !== "queued" || !["idle", "done"].includes(context.status))) return null;
     this.previousGate = this.gate;
@@ -49,7 +52,7 @@ export class Outbox {
     const item = this.items.find(item => item.id === id);
     if (!item) return;
     if (error) {
-      item.state = paused ? "queued" : "error"; item.error = paused ? null : error;
+      item.state = paused && !item.direct ? "queued" : "error"; item.error = paused && !item.direct ? null : error;
       this.gate = this.previousGate ?? null;
     } else this.items = this.items.filter(item => item.id !== id);
     this.previousGate = null;

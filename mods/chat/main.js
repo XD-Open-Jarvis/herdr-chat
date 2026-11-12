@@ -1456,6 +1456,24 @@ export default class Chat extends View {
     });
   }
 
+  failedSendsView(t) {
+    const items = this.outbox.failedItems;
+    if (!items.length) return null;
+    const scope = this.queueContext().scope;
+    return h_flex().w_full().justify_center().child(v_flex().w_full().max_w(900).gap(6)
+      .children(items.map(item => v_flex().id(`failed-send-${item.id}`).w_full().gap(5).px(12).py(9)
+        .rounded(10).border_1().border_color(t.blocked).bg(t.background)
+        .child(h_flex().gap(8).items_center()
+          .child(div().flex_1().text_size(12).text_color(t.blocked).child("Failed to send"))
+          .child(this.button(`retry-send-${item.id}`, "Retry", (_e, cx) => this.pumpOutbox(cx, item.id), t)
+            .when(scope !== item.scope, button => button.opacity(0.4)))
+          .child(this.button(`remove-failed-${item.id}`, "Remove", (_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }, t)))
+        .child(div().truncate().text_size(12.5).text_color(t.foreground).tooltip(item.text).child(summaryLine(item.text)))
+        .when(item.attachments.length > 0, row => row.child(div().text_size(11).text_color(t.muted)
+          .child(`${item.attachments.length} ${item.attachments.length === 1 ? "attachment" : "attachments"}`)))
+        .child(div().text_size(11).text_color(t.muted).child(scope !== item.scope ? "Return to the original session to retry." : item.error)))));
+  }
+
   outboxView(t) {
     const items = this.outbox.visibleItems;
     if (!items.length) return null;
@@ -1677,6 +1695,10 @@ export default class Chat extends View {
       this.error = "Wait for the conversation to be identified before queueing a message.";
       return cx.notify();
     }
+    if (!/^[\/!]/.test(text) && this.t?.issue?.usage) {
+      this.error = "Usage limit reached. Your draft has been kept; retry after the limit resets or choose another model.";
+      return cx.notify();
+    }
     const attachments = this.attach.map(attachment => ({ ...attachment }));
     this.input.set_value("");
     this.attach = [];
@@ -1718,7 +1740,7 @@ export default class Chat extends View {
     for (const f of files) {
       // An agent on another machine needs the file there.
       if (machineOf(target)) {
-        const r = await hc(["put", target, f]);
+        const r = await exec("hc", ["put", target, f], { timeout: 180000 });
         if (options.valid && r.code !== 0) throw new Error(r.stderr.trim() || "Could not upload the attachment.");
         paths.push(r.code === 0 ? r.stdout.trim() : f);
       } else paths.push(f);
@@ -1729,7 +1751,9 @@ export default class Chat extends View {
     // terminal.send may protect an unfinished TUI draft for 60 seconds.
     // herdr.hc() has a fixed 30-second ceiling; use the configurable exec path.
     if (options.valid) {
-      const screen = await hc(["read", target, "--lines", "40"]);
+      let screen;
+      try { screen = await exec("hc", ["read", target, "--lines", "0"], { timeout: 90000 }); }
+      catch (error) { throw new Error(`Could not check terminal input before sending: ${error?.message ?? error}`); }
       if (screen.code !== 0) throw new Error(screen.stderr?.trim() || "Could not check terminal input");
       const menu = menuAtBottom(screen.stdout);
       if (menu) {
@@ -2513,6 +2537,7 @@ export default class Chat extends View {
       .when(Boolean(this.slash()), (el) => el.child(h_flex().w_full().justify_center().child(this.commandMenu(t))))
       .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.emojiView(t))))
       .when(!this.slash() && Boolean(this.mentionMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.mentionView(t))))
+      .when(!this.dialog && this.outbox.failedItems.length > 0, el => el.child(this.failedSendsView(t)))
       .when(!this.dialog && this.outbox.visibleItems.length > 0, el => el.child(this.outboxView(t)))
       .child(h_flex().w_full().justify_center().child(card));
   }

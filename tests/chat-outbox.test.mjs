@@ -71,10 +71,22 @@ test('failed or uncertain direct deliveries become visible for recovery',()=>{
  const q=new Outbox();const item=q.enqueue({text:'retain me',paths:[],attachments:[],direct:true},idle.scope);
  q.claim(idle);assert.equal(q.visibleItems.length,0);
  const restored=new Outbox(JSON.parse(JSON.stringify(q)));
- assert.equal(restored.visibleItems[0].text,'retain me');assert.equal(restored.visibleItems[0].state,'error');
- q.finish(item.id,'offline');assert.equal(q.visibleItems[0],item);assert.equal(item.error,'offline');
+ assert.equal(restored.visibleItems.length,0);assert.equal(restored.failedItems[0].text,'retain me');assert.equal(restored.failedItems[0].state,'error');
+ q.finish(item.id,'offline');assert.equal(q.visibleItems.length,0);assert.equal(q.failedItems[0],item);assert.equal(item.error,'offline');
 });
 test('an error phase does not auto-send but permits an explicit retry after the user chooses recovery',()=>{
  const q=new Outbox();const item=add(q,'retry');const context={...idle,status:'error'};
  assert.equal(q.claim(context),null);assert.equal(q.claim(context,item.id),item);
+});
+test('a failed idle send is separate from the queue and never blocks a later idle send',()=>{
+ const q=new Outbox();const failed=q.enqueue({text:'old',paths:[],attachments:[],direct:true},idle.scope);
+ q.claim(idle);q.finish(failed.id,'read timed out');
+ assert.equal(q.visibleItems.length,0);assert.equal(q.failedItems.length,1);assert.equal(q.canSendDirect(idle),true);
+ const next=q.enqueue({text:'new',paths:[],attachments:[],direct:true},idle.scope);
+ assert.equal(q.claim(idle),next);assert.equal(q.visibleItems.length,0);assert.equal(q.failedItems[0],failed);
+});
+test('an idle send interrupted by a terminal menu stays recoverable without appearing as a working queue',()=>{
+ const q=new Outbox();const item=q.enqueue({text:'draft',paths:[],attachments:[],direct:true},idle.scope);
+ q.claim(idle);q.finish(item.id,'Waiting for your selection',true);
+ assert.equal(q.visibleItems.length,0);assert.equal(q.failedItems[0].text,'draft');
 });

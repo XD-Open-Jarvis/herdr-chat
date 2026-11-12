@@ -10,7 +10,7 @@ const method=(name,next,bindings={})=>{
  const part=source.slice(source.indexOf(`  ${name}(`),source.indexOf(`\n  ${next}(`));
  return Function(...Object.keys(bindings),`return ({${part.trim()}})`)(...Object.values(bindings))[name];
 };
-const pump=method('pumpOutbox','outboxView');
+const pump=method('pumpOutbox','failedSendsView');
 const make=()=>{
  const tasks=[],calls=[];const context={scope:'t1:42:sid',status:'working',turn:1};
  const chat={outbox:new Outbox(),pending:[],term:'t1',queueContext:()=>context,
@@ -60,7 +60,7 @@ test('Enter while busy enqueues text and attachment snapshots without delivering
  attachment.name='changed';assert.equal(queued.attachments[0].name,'a.png');
 });
 const deliverySource=source.slice(source.indexOf('  async deliver('),source.indexOf('\n  // Starts one terminal'));
-const delivery=(hc,machineOf=()=>null,screen='')=>Function('hc','exec','agentKind','machineOf','shellEscape','menuAtBottom',`return ({${deliverySource.trim()}}).deliver`)(async args=>args[0]==='read'?{code:0,stdout:screen}:hc(args),async(command,args,options)=>{assert.equal(command,'hc');assert.equal(options.timeout,180000);return hc(args);},()=> 'codex',machineOf,value=>value,menuAtBottom);
+const delivery=(hc,machineOf=()=>null,screen='')=>Function('hc','exec','agentKind','machineOf','shellEscape','menuAtBottom',`return ({${deliverySource.trim()}}).deliver`)(async args=>args[0]==='read'?{code:0,stdout:screen}:hc(args),async(command,args,options)=>{assert.equal(command,'hc');assert.equal(options.timeout,args[0]==='read'?90000:180000);if(args[0]==='read'){assert.equal(args.at(-1),'0');return {code:0,stdout:screen};}return hc(args);},()=> 'codex',machineOf,value=>value,menuAtBottom);
 test('automatic delivery uses an atomic idle guard; Send now uses the normal steering submission',async()=>{
  const calls=[],fn=delivery(async args=>{calls.push(args);return {code:0};});
  const chat={term:'mini/t1',terminal:()=>({status:'working'})};const cx={notify(){}};
@@ -106,4 +106,15 @@ test('a usage-limit error pauses automatic sends while retaining the queue and a
  const item=chat.outbox.enqueue({text:'wait',paths:[],attachments:[]},context.scope);
  pump.call(chat,cx);assert.equal(tasks.length,0);assert.equal(item.state,'queued');
  pump.call(chat,cx,item.id);assert.equal(tasks.length,1);await tasks.shift()();assert.equal(chat.outbox.items.length,0);
+});
+test('a prior failed idle delivery does not force the next idle message into the queue',async()=>{
+ const {chat,context,cx,tasks}=make();context.status='idle';
+ const old=chat.outbox.enqueue({text:'old',paths:[],attachments:[],direct:true},context.scope);
+ chat.outbox.claim(context);chat.outbox.finish(old.id,'read failed');let draft='new request';
+ Object.assign(chat,{sessionResolved:true,terminal:()=>({status:'idle'}),
+  slash:()=>null,mentionMenu:()=>null,emojiMenu:()=>null,panelLive:()=>false,typedCommand:()=>null,
+  input:{value:()=>draft,set_value:value=>{draft=value;}},attach:[],pumpOutbox:()=>pump.call(chat,cx)});
+ send.call(chat,cx);
+ assert.equal(tasks.length,1);assert.equal(chat.pending[0].text,'new request');assert.equal(chat.outbox.visibleItems.length,0);
+ assert.equal(chat.outbox.failedItems[0],old);await tasks[0]();
 });
