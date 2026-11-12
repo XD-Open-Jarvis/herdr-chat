@@ -153,6 +153,25 @@ export class Transcript {
     this.push({ kind: "user", text, images, files, ...(incoming.from ? { from: incoming.from } : {}) });
   }
 
+  modelSettings(model, effort) {
+    const before = this.model;
+    const changed = before && ((model && model !== before) || (effort != null && effort !== this.effort));
+    this.model = model ?? this.model;
+    this.effort = effort ?? this.effort;
+    if (changed) this.push({ kind: "notice", event: "model_changed",
+      text: `Model changed to ${[this.model, this.effort].filter(Boolean).join(" · ")}` });
+  }
+
+  completed(duration, timestamp, id) {
+    if (!Number.isFinite(duration) || duration < 0) return;
+    this.completedTurns ??= new Set();
+    if (id && this.completedTurns.has(id)) return;
+    if (id) this.completedTurns.add(id);
+    const seconds = Math.floor(duration / 1000), minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+    const elapsed = hours ? `${hours}h ${minutes % 60}m ${seconds % 60}s` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+    this.push({ kind: "notice", event: "completed", text: `Worked for ${elapsed}`, timestamp });
+  }
+
   // The context card, in place of the terminal's drawing of the same numbers.
   contextCard(md) {
     const tokens = /\*\*Tokens:\*\*\s*([\d.]+[km]?)\s*\/\s*([\d.]+[km]?)\s*\((\d+)%\)/i.exec(md);
@@ -184,7 +203,9 @@ export class Transcript {
   toolUse(id, name, input) {
     let group = this.last();
     if (group?.kind !== "tools" || group.key === this.breakAfter) group = this.push({ kind: "tools", items: [] });
-    const item = { id, name, summary: summarize(input), result: null, error: false, images: [] };
+    let args = input;
+    if (typeof args === "string") { try { args = JSON.parse(args); } catch {} }
+    const item = { id, name, summary: summarize(input), input: args, result: null, error: false, images: [] };
     group.items.push(item);
     if (id) this.tools.set(id, item);
   }
@@ -211,6 +232,8 @@ export class Transcript {
 
   claude(d) {
     if (d.isSidechain) return;
+    if (d.type === "system" && d.subtype === "turn_duration")
+      return this.completed(d.durationMs, d.timestamp, d.uuid);
     if (d.type === "queue-operation") {
       const text = typeof d.content === "string" ? d.content : "";
       if (d.operation === "enqueue") this.queue.push(text);
@@ -287,12 +310,21 @@ export class Transcript {
     const p = d.payload ?? {};
     if (d.type === "compacted") return this.note("Conversation compacted");
     if (d.type === "turn_context") {
-      this.model = p.model ?? this.model;
-      this.effort = p.effort ?? p.collaboration_mode?.settings?.reasoning_effort ?? this.effort;
+      this.modelSettings(p.model, p.effort ?? p.collaboration_mode?.settings?.reasoning_effort);
       // Which of /permissions' presets this turn ran with.
       const box = p.sandbox_policy?.type;
       if (box) this.mode = box === "read-only" ? "read" : box === "danger-full-access" ? "full" : p.approvals_reviewer === "auto_review" ? "auto" : "ask";
       return;
+    }
+    if (d.type === "event_msg" && p.type === "thread_settings_applied") {
+      const settings = p.thread_settings ?? {};
+      this.modelSettings(settings.model, settings.reasoning_effort ?? settings.collaboration_mode?.settings?.reasoning_effort);
+      return;
+    }
+    if (d.type === "event_msg" && p.type === "task_complete") {
+      const duration = p.duration_ms ?? (Number.isFinite(p.started_at) && Number.isFinite(p.completed_at)
+        ? (p.completed_at - p.started_at) * 1000 : null);
+      return this.completed(duration, d.timestamp, p.turn_id ?? p.root_turn_id ?? d.timestamp);
     }
     if (d.type === "event_msg" && p.type === "turn_aborted") return this.note("Interrupted");
     // Codex's running totals: tokens, how full the context is, and its limits.

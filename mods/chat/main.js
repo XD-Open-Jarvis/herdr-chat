@@ -1761,16 +1761,14 @@ export default class Chat extends View {
         .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t))));
     }
-    if (e.kind === "card") return this.card(e, t);
-    // What a slash command printed, as the terminal shows it.
-    if (e.kind === "output") {
-      const lines = e.text.split("\n");
-      const shown = lines.length > 40 ? [...lines.slice(0, 40), `… ${lines.length - 40} more lines`] : lines;
-      const mono = settings().font_family;
-      return div().w_full().px(14).py(10).rounded(10).bg(t.surface).text_size(11.5).text_color(t.muted)
-        .when(Boolean(mono), (d) => d.font_family(mono))
-        .child(this.markdown(`out-${e.key}`, "~~~~text\n" + shown.join("\n") + "\n~~~~"));
+    if (e.kind === "notice") {
+      const at = new Date(e.timestamp);
+      const time = Number.isFinite(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : null;
+      return h_flex().w_full().gap(8).py(2).items_center().text_size(11.5).text_color(t.dim)
+        .child(div().child(e.text)).when(Boolean(time), el => el.child(div().child(`· ${time}`)));
     }
+    if (e.kind === "card") return this.card(e, t);
+    if (e.kind === "output") return this.plainOutput(`out-${e.key}`, e.text, t);
     if (e.kind === "note") {
       const text = e.text.length > 400 ? e.text.slice(0, 400) + "…" : e.text;
       const note = h_flex().w_full().justify_center().child(
@@ -1784,6 +1782,26 @@ export default class Chat extends View {
         .border_color(t.border).bg(t.surface).text_size(13).child(this.markdown(`summary-${e.key}`, e.summary)));
     }
     return this.tools(e, t, last);
+  }
+
+  // Render terminal output as selectable literal text, without Markdown's
+  // fenced-code frame/language badge. Long output expands explicitly.
+  plainOutput(id, text, t, error = false, framed = true) {
+    const lines = text.split("\n"), long = lines.length > 12 || text.length > 900;
+    const open = this.open.has(`output-${id}`);
+    const shown = long && !open ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
+    const escaped = shown.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/\t/g, "    ").replace(/^ +/gm, spaces => "&nbsp;".repeat(spaces.length)).replace(/\n/g, "<br>");
+    const short = !long && lines.length <= 2;
+    return v_flex().w_full().min_w(0).gap(4)
+      .child(div().w_full().min_w(0).text_size(!framed ? 12 : short ? 12.5 : 11.5).text_color(error ? t.blocked : t.muted)
+        .when(!short && framed, el => el.px(12).py(8).rounded(8).bg(t.surface).border_1().border_color(error ? t.blocked : t.border))
+        .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
+        .child(TextView.html(id, `<div>${escaped}</div>`).selectable(true)))
+      .when(long, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
+        .hover(style => style.text_color(t.foreground))
+        .on_click((_event, cx) => { open ? this.open.delete(`output-${id}`) : this.open.add(`output-${id}`); cx.notify(); })
+        .child(open ? "Show less" : "Show more")));
   }
 
   // The context, status and usage cards, as the Claude app draws them.
@@ -1896,7 +1914,7 @@ export default class Chat extends View {
     const failed = e.items.some((i) => i.error);
     const thumbs = e.items.flatMap((i) => i.images);
     return v_flex().w_full().gap(6)
-      .child(h_flex().id(`tg-${e.key}`).gap(6).items_center().cursor_pointer().text_size(12).text_color(t.dim)
+      .child(h_flex().id(`tg-${e.key}`).gap(6).items_center().cursor_pointer().text_size(13).text_color(t.dim)
         .hover((s) => s.text_color(t.muted))
         .on_click((_ev, cx) => { open ? this.open.delete(e.key) : this.open.add(e.key); cx.notify(); })
         .child(div().w(10).flex_none().child(open ? "▾" : "▸"))
@@ -1908,16 +1926,27 @@ export default class Chat extends View {
   }
 
   tool(key, n, i, t) {
-    const result = (i.result ?? "").split("\n");
-    const clipped = result.length > 30 ? [...result.slice(0, 30), `… ${result.length - 30} more lines`] : result;
-    return v_flex().pl(16).gap(4)
-      .child(h_flex().gap(6).text_size(12)
-        .child(div().flex_none().font_semibold().text_color(t.muted).child(i.name))
-        .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(i.summary)))
-      .when(i.images.length > 0, (el) => el.child(h_flex().flex_wrap().gap(6).children(i.images.map((im) => this.img(im.ref, t, 420, 300)))))
-      .when(i.result !== null && i.result.trim() !== "", (el) => el.child(
-        div().rounded(6).border_1().border_color(i.error ? t.blocked : t.border).text_size(11.5)
-          .child(this.markdown(`${key}-r${n}`, "~~~~text\n" + clipped.join("\n") + "\n~~~~"))));
+    const id = `tool-${key}-${n}`, open = this.open.has(id);
+    const running = i.result === null && this.terminal()?.status === "working";
+    return v_flex().w_full().min_w(0).rounded(10).border_1().border_color(i.error ? t.blocked : t.border).bg(t.surface)
+      .child(h_flex().id(id).px(12).py(8).gap(8).items_center().cursor_pointer()
+        .hover(style => style.bg(t.hover))
+        .on_click((_event, cx) => { open ? this.open.delete(id) : this.open.add(id); cx.notify(); })
+        .child(svg("mods/chat/icons/plug.svg").size(14).flex_none().text_color(t.dim))
+        .child(div().flex_none().text_size(12.5).font_semibold().text_color(t.foreground).child(i.name))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(i.summary))
+        .when(running, el => el.child(div().text_size(12).text_color(t.dim).frames(SPINNER, 90)))
+        .when(!running, el => el.child(div().text_size(12).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : i.result === null ? "Pending" : "Done")))
+        .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none().text_color(t.dim)))
+      .when(open && i.input != null, el => el.child(v_flex().px(12).pb(10).gap(4)
+        .child(div().text_size(11).text_color(t.dim).child("Input"))
+        .child(this.plainOutput(`${id}-input`, typeof i.input === "string" ? i.input
+          : i.input.command ?? i.input.cmd ?? JSON.stringify(i.input, null, 2), t, false, false))))
+      .when(open && Boolean(i.result?.trim()), el => el.child(v_flex().px(12).pb(10).gap(4)
+        .child(div().text_size(11).text_color(t.dim).child("Output"))
+        .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
+      .when(i.images.length > 0, el => el.child(h_flex().px(12).pb(10).flex_wrap().gap(6)
+        .children(i.images.map(image => this.img(image.ref, t, 420, 300)))));
   }
 
   // Model and effort picks, for a new chat or the running one.

@@ -84,3 +84,25 @@ test('new tool calls cannot merge above an optimistic user message',()=>{
  const t=new Transcript('codex');t.toolUse('a','read',{});t.markInput();t.toolUse('b','exec',{});
  assert.equal(t.entries.length,2);assert.equal(t.entries[0].items.length,1);assert.equal(t.entries[1].items[0].id,'b');
 });
+test('Codex task completion produces a deduplicated compact duration notice',()=>{
+ const t=new Transcript('codex');const event={type:'event_msg',timestamp:'2026-11-12T03:08:45Z',payload:{type:'task_complete',turn_id:'turn1',duration_ms:187862}};
+ t.feed(JSON.stringify(event));t.feed(JSON.stringify(event));
+ assert.equal(t.entries.length,1);assert.equal(t.entries[0].kind,'notice');assert.equal(t.entries[0].text,'Worked for 3m 7s');assert.equal(t.entries[0].timestamp,event.timestamp);
+});
+test('Codex reports actual model/effort changes but not initial or unchanged settings',()=>{
+ const t=new Transcript('codex');
+ const settings=(model,effort)=>t.feed(JSON.stringify({type:'event_msg',payload:{type:'thread_settings_applied',thread_settings:{model,reasoning_effort:effort}}}));
+ settings('gpt-6.1-sol','low');settings('gpt-6.1-sol','medium');settings('gpt-6.1-sol','low');settings('gpt-6.1-sol','low');
+ t.feed(JSON.stringify({type:'turn_context',payload:{model:'gpt-6.1-sol',effort:'low'}}));
+ assert.deepEqual(t.entries.map(e=>e.text),['Model changed to gpt-6.1-sol · medium','Model changed to gpt-6.1-sol · low']);
+});
+test('Claude duration and local command output have separate event types',()=>{
+ const t=new Transcript('claude');t.feed(JSON.stringify({type:'system',subtype:'turn_duration',durationMs:2276,uuid:'turn1'}));
+ t.user('<local-command-stdout>Set effort level to low</local-command-stdout>');
+ assert.equal(t.entries[0].text,'Worked for 2s');assert.equal(t.entries[0].kind,'notice');
+ assert.equal(t.entries[1].kind,'output');assert.equal(t.entries[1].text,'Set effort level to low');
+});
+test('tool input remains available in expandable details',()=>{
+ const t=new Transcript('codex');t.toolUse('tool1','exec_command',JSON.stringify({cmd:'printf "hello"'}));
+ assert.equal(t.entries[0].items[0].input.cmd,'printf "hello"');
+});
