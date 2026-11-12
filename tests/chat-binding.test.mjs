@@ -32,3 +32,8 @@ test('binding owner keys survive connection alias changes and isolate panes',()=
 test('a new title whose log is not yet available revokes the old binding',()=>{
  assert.equal(chooseBinding(bound,{file:null,evidence:'title'},bound.process),null);
 });
+test('an old subagent binding is discarded even if the process is unchanged',()=>{
+ assert.equal(chooseBinding(bound,{file:null,evidence:'ambiguous',invalidPrevious:true},bound.process),null);
+ const next=chooseBinding(bound,{file:'/sessions/primary.jsonl',evidence:'text',invalidPrevious:true},bound.process);
+ assert.equal(next.file,'/sessions/primary.jsonl');
+});

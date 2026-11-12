@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,appendFileSync,rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -16,7 +16,7 @@ function fixture(fn){
  const write=(i,text,base)=>writeFileSync(files[i],JSON.stringify({type:'session_meta',payload:{id:ids[i],cwd:'/repo',...(base?{history_base:base}:{})}})+'\n'+text);
  write(0,message(common));const bound=Buffer.byteLength(readFileSync(files[0]));
  write(1,message('First distinctive child message with enough characters')+message('Second distinctive child reply with enough characters','agent_message'),{thread_id:ids[0],end_byte_offset:bound});
- const resolve=(screen,identity=null)=>JSON.parse(execFileSync('python3',['-c',script,JSON.stringify([screen,'/repo',files[0],history,identity])],{env:{...process.env,HOME:home},encoding:'utf8'}));
+ const resolve=(screen,identity=null,previous=null)=>JSON.parse(execFileSync('python3',['-c',script,JSON.stringify([screen,'/repo',files[0],history,identity,previous])],{env:{...process.env,HOME:home},encoding:'utf8'}));
  try{fn({resolve,files,ids,common});}finally{rmSync(home,{recursive:true,force:true});}
 }
 test('shared inherited fork history remains ambiguous despite open parent hint',()=>fixture(({resolve,common})=>assert.equal(resolve(common).file,null)));
@@ -40,4 +40,34 @@ test('colliding prefixes fail closed instead of choosing a file by date',()=>fix
 test('an empty new title is distinguished from a collision while waiting for its log',()=>fixture(({resolve})=>{
  const result=resolve('',{prefix:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaa',complete:false});
  assert.equal(result.file,null);assert.equal(result.matchCount,0);assert.equal(result.evidence,'title');
+}));
+test('Guardian copied context cannot win text, title or status matching',()=>fixture(({resolve,files,ids})=>{
+ const first='First main conversation message with unique content';
+ const second='Second main conversation reply with unique content';
+ const record=(type,message)=>JSON.stringify({type:'event_msg',payload:{type,message}})+'\n';
+ appendFileSync(files[0],record('user_message',first)+record('agent_message',second));
+ const guardian='33333333-3333-3333-3333-333333333333';
+ const path=files[0].replace(ids[0],guardian);
+ writeFileSync(path,JSON.stringify({type:'session_meta',payload:{id:guardian,cwd:'/repo',parent_thread_id:ids[0],source:{subagent:{other:'guardian'}}}})+'\n'+record('user_message',first)+record('agent_message',second));
+ const screen=first+'\n'+second;
+ assert.equal(resolve(screen).file,files[0]);
+ assert.deepEqual([resolve('',{prefix:guardian,complete:true}).file,resolve(`Model: gpt-5\nSession: ${guardian}\nContext window: 30%`).file],[null,null]);
+ const old=resolve(screen,null,path);assert.equal(old.invalidPrevious,true);assert.equal(old.file,files[0]);
+}));
+test('parent or structured subagent source alone excludes copied logs',()=>fixture(({resolve,files,ids})=>{
+ const text='Two independent messages in a different candidate';
+ for(const [suffix,extra] of [['44444444-4444-4444-4444-444444444444',{parent_thread_id:ids[0]}],['55555555-5555-5555-5555-555555555555',{source:{subagent:{thread_spawn:{}}}}]]){
+  const path=files[0].replace(ids[0],suffix);
+  writeFileSync(path,JSON.stringify({type:'session_meta',payload:{id:suffix,cwd:'/repo',...extra}})+'\n'+JSON.stringify({type:'event_msg',payload:{type:'user_message',message:text}})+'\n');
+  assert.equal(resolve('',{prefix:suffix,complete:true}).file,null);
+ }
+}));
+test('duplicate primary root conversations remain ambiguous',()=>fixture(({resolve,files,ids})=>{
+ const first='Identical root conversation request with enough content';
+ const second='Identical root conversation answer with enough content';
+ const records=[first,second].map((message,i)=>JSON.stringify({type:'event_msg',payload:{type:i?'agent_message':'user_message',message}})+'\n').join('');
+ appendFileSync(files[0],records);
+ const other='66666666-6666-6666-6666-666666666666';
+ writeFileSync(files[0].replace(ids[0],other),JSON.stringify({type:'session_meta',payload:{id:other,cwd:'/repo',source:'cli'}})+'\n'+records);
+ assert.equal(resolve(first+'\n'+second).file,null);
 }));

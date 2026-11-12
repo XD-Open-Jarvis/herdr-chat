@@ -9,7 +9,24 @@ export const SESSION_PY = `
 import json, pathlib, sys, re, io, contextlib
 screen, cwd, hint, history, *extra = json.loads(sys.argv[1])
 identity = extra[0] if extra else None
+previous = extra[1] if len(extra) > 1 else None
 root = pathlib.Path.home()/".codex"/"sessions"
+def primary(meta):
+    # Codex subagents (including Guardian) can copy their parent's complete
+    # conversation. Their content must never identify the terminal's thread.
+    return (bool(re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", meta.get("id", "")))
+            and not meta.get("parent_thread_id") and not isinstance(meta.get("source"), dict))
+def read_meta(path):
+    with pathlib.Path(path).open() as stream:
+        item = json.loads(stream.readline())
+    return item.get("payload", {}) if item.get("type") == "session_meta" else {}
+try:
+    previous_valid = not previous or primary(read_meta(previous))
+except Exception:
+    previous_valid = False
+def emit(**result):
+    result["invalidPrevious"] = not previous_valid
+    print(json.dumps(result)); sys.exit()
 # The terminal supplied this identity. Never replace it with a cwd/text guess
 # while its new log is being created or when the prefix is ambiguous.
 if identity:
@@ -19,14 +36,15 @@ if identity:
     matches = []
     for path in root.rglob("rollout-*" + prefix + "*.jsonl"):
         try:
-            with path.open() as stream: meta = json.loads(stream.readline()).get("payload", {})
+            meta = read_meta(path)
+            if not primary(meta): continue
             ident = meta.get("id", "")
             if ident.startswith(prefix) and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", ident):
                 if identity.get("complete") and ident != prefix: continue
                 matches.append((str(path), ident))
         except Exception: pass
     found = matches[0] if len(matches) == 1 else (None, None)
-    print(json.dumps({"file":found[0], "sessionId":found[1], "evidence":"title", "matchCount":len(matches)})); sys.exit()
+    emit(file=found[0], sessionId=found[1], evidence="title", matchCount=len(matches))
 def norm(s):
     s = re.sub(r"\\x1b\\[[0-?]*[ -/]*[@-~]", "", s)
     return re.sub(r"[\\W_]+", "", s).casefold()
@@ -34,7 +52,8 @@ found = []
 all_sessions = []
 for path in root.rglob("rollout-*.jsonl"):
     try:
-        with path.open() as stream: meta = json.loads(stream.readline()).get("payload", {})
+        meta = read_meta(path)
+        if not primary(meta): continue
         all_sessions.append((str(path), meta.get("id")))
         if meta.get("cwd") == cwd: found.append((str(path), meta.get("id")))
     except Exception: pass
@@ -44,10 +63,10 @@ ids = re.findall(r"(?mi)^\\s*[│┃]?\\s*Session(?: ID)?\\s*:\\s*([0-9a-f]{8}(?
 status = bool(re.search(r"(?i)context window\\s*:", screen) and re.search(r"(?i)(model|directory)\\s*:", screen))
 if status and len(set(ids)) == 1:
     matches = [p for p, ident in all_sessions if ident == ids[0]]
-    print(json.dumps({"file":matches[0] if len(matches)==1 else None,"evidence":"status"})); sys.exit()
+    emit(file=matches[0] if len(matches)==1 else None,evidence="status")
 # Bound the work. Never discard older candidates and select a newer one instead.
 if len(found) > 40:
-    print(json.dumps({"file":None,"evidence":"too-many-candidates"})); sys.exit()
+    emit(file=None,evidence="too-many-candidates")
 anchors = []
 for line in screen.splitlines():
     line = re.sub(r"^\\s*[›❯•●│┃]+\\s*", "", line)
@@ -87,11 +106,11 @@ for path, hits, positions in scores:
     ordered = any(positions[a] < positions[b] for a in unique for b in unique if a < b)
     if ordered: winners.append(path)
 file = winners[0] if len(winners)==1 and not failed else None
-print(json.dumps({"file":file,"evidence":"text" if file else "ambiguous"}))
+emit(file=file,evidence="text" if file else "ambiguous")
 `;
 
-export async function resolveSession(term, screen, hint) {
-  const result = await exec("python3", ["-c", SESSION_PY, JSON.stringify([screen, term.foreground?.cwd ?? "", hint, HISTORY_PY, codexTitleIdentity(term)])], { on: machineOf(term.address), timeout: 30000 });
+export async function resolveSession(term, screen, hint, previous = null) {
+  const result = await exec("python3", ["-c", SESSION_PY, JSON.stringify([screen, term.foreground?.cwd ?? "", hint, HISTORY_PY, codexTitleIdentity(term), previous])], { on: machineOf(term.address), timeout: 30000 });
   if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not identify the conversation");
   return JSON.parse(result.stdout);
 }

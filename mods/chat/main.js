@@ -1254,13 +1254,8 @@ export default class Chat extends View {
               cx.notify();
             }
             this.binding = previous;
-            if (previous && !titleIdentity) {
-              this.sessionResolved = true;
-              if (previous.file !== this.file) this.start(previous.file, machineOf(term.address), kind, cx);
-              cx.notify();
-            }
             const screen = titleIdentity ? { stdout: "" } : await hc(["read", term.address]);
-            const result = await resolveSession(term, screen.stdout, file);
+            const result = await resolveSession(term, screen.stdout, file, previous?.file);
             if (!stillCurrent()) return;
             waitingForLog = result.evidence === "title" && result.matchCount === 0;
             const next = chooseBinding(previous, result, process);
