@@ -92,13 +92,6 @@ export default class ChatFile extends View {
     return v_flex().id("image-window").size_full().bg(t.background).text_color(t.foreground)
       .child(h_flex().h(40).px(14).gap(4).items_center().flex_none()
         .child(div().flex_1().min_w(0).truncate().text_size(13).child(p.title ?? "Image"))
-        .child(button("image-minus", "−", "Zoom out", cx => this.zoomImage(scale / 1.25, cx)))
-        .child(div().w(48).flex_none().text_size(11.5).text_color(t.muted).child(`${Math.round(scale * 100)}%`))
-        .child(button("image-plus", "+", "Zoom in", cx => this.zoomImage(scale * 1.25, cx)))
-        .child(button("image-original", "100%", "Actual size", cx => this.zoomImage(1, cx)))
-        .child(button("image-fit", "Fit", "Fit to window", cx => {
-          this.imageScale = null; this.imageOffset = { x: 0, y: 0 }; cx.notify();
-        }))
         .child(button("close-image", "×", "Close", () => closeOverlay(p.overlay))))
       .child(div().id("image-viewport").relative().flex_1().min_h(0).overflow_hidden()
         .tooltip("Scroll to zoom · Drag to pan")
@@ -129,7 +122,18 @@ export default class ChatFile extends View {
         .on_mouse_up("left", () => { this.imageDrag = null; })
         .on_hover(on => { if (!on) this.imageDrag = null; })
         .child(div().absolute().left(bounds.left).top(bounds.top).w(bounds.width).h(bounds.height)
-          .child(image(p.image).w(bounds.width).h(bounds.height))));
+          .child(image(p.image).w(bounds.width).h(bounds.height)))
+        .child(h_flex().id("image-zoom-controls").absolute().right(12).bottom(12).gap(2).p(4).items_center()
+          .rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
+          .on_scroll_wheel((_event, cx) => cx.stop_propagation())
+        .child(button("image-minus", "−", "Zoom out", cx => this.zoomImage(scale / 1.25, cx)))
+        .child(div().w(48).flex_none().text_size(11.5).text_color(t.muted).child(`${Math.round(scale * 100)}%`))
+        .child(button("image-plus", "+", "Zoom in", cx => this.zoomImage(scale * 1.25, cx)))
+        .child(button("image-original", "100%", "Actual size", cx => this.zoomImage(1, cx)))
+        .child(button("image-fit", "Fit", "Fit to window", cx => {
+          this.imageScale = null; this.imageOffset = { x: 0, y: 0 }; cx.notify();
+        }))
+        ));
   }
 
   render() {
