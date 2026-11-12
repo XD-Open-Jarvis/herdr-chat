@@ -734,6 +734,7 @@ export default class Chat extends View {
   hostCommand(cmd, args, cx) {
     const clear = () => { this.input.set_value(""); return true; };
     if (cmd.action === "model" && !args && this.models?.length) return this.openSub("model");
+    if (cmd.action === "effort" && !args && this.current().kind === "claude") { this.openEffort(cx); return clear(); }
     if ((cmd.action === "model" || cmd.action === "effort") && !args) { this.showModels = true; return clear(); }
     if (cmd.action === "status" || cmd.action === "usage") { this.hostCard(cmd.action, cx); return clear(); }
     if (["memory", "hooks", "mcp", "skills", "plugins", "config"].includes(cmd.action) && !args) { this.infoCard(cmd.action, cx, cmd.name); return clear(); }
@@ -1787,6 +1788,19 @@ export default class Chat extends View {
     });
   }
 
+  // Custom/provider model names need not appear in our model catalog.
+  // Let the running Claude Code supply its supported effort levels.
+  openEffort(cx) {
+    this.showModels = false;
+    cx.spawn(async cx => {
+      try {
+        if (await this.deliver("/effort", [], cx)) this.openPanel("/effort", cx);
+      } catch (error) { this.error = String(error?.message ?? error); }
+      cx.notify();
+    });
+    cx.notify();
+  }
+
   // Switches the running session's model or effort.
   applyModel(model, effort, cx) {
     const kind = this.t?.kind ?? agentKind(this.terminal());
@@ -2232,7 +2246,7 @@ export default class Chat extends View {
   // The model and effort of the running session: a button in the message bar
   // whose menu opens upward.
   modelMenu(term, t) {
-    const { cat, model, effort } = this.current();
+    const { kind, cat, model, effort } = this.current();
     const name = [modelName(cat?.models, model), effort].filter(Boolean).join(" · ");
     if (!name) return div();
     const label = h_flex().gap(5).items_center()
@@ -2251,6 +2265,9 @@ export default class Chat extends View {
       .children((cat?.models ?? []).map((m) => item(`mm-${m.id}`, m.name, m.id === model, pick(m.id, null))))
       .when(efforts.length > 0, (el) => el.child(div().h(1).mx(6).my(4).bg(t.border)).child(heading("Effort"))
         .children(efforts.map((e) => item(`me-${e}`, e, e === effort, pick(null, e)))))
+      .when(kind === "claude" && efforts.length === 0, el => el
+        .child(div().h(1).mx(6).my(4).bg(t.border)).child(heading("Effort"))
+        .child(item("me-native", "Adjust effort…", false, (_ev, cx) => this.openEffort(cx))))
       .when(term?.status === "working", (el) => el.child(div().px(10).py(6).text_size(11).text_color(t.dim).child("The agent is busy; a switch waits in its queue.")));
     return Popover.new("model-menu").anchor("bottom_right").open(Boolean(this.showModels))
       .on_open_change((open, cx) => { this.showModels = open; cx.notify(); })
