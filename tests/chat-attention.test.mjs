@@ -35,3 +35,26 @@ test('writes are serialized so an earlier turn cannot overwrite a later one',asy
  await Promise.resolve();assert.equal(tracker.update({...terminal,turn:5},shown,()=>{}),null);
  finish();await pending;await tracker.update({...terminal,turn:5},shown,()=>calls.push('next'));assert.equal(calls.length,2);
 });
+test('raw idle with an unread turn is acknowledged even though only the sidebar says done',async()=>{
+ const tracker=new ChatAttention(),calls=[];
+ const raw={address:'t1g',status:'idle',turn:48,labels:{'herdr.seen':'47'}};
+ await tracker.update(raw,shown,(address,turn)=>calls.push({address,turn}));
+ assert.deepEqual(calls,[{address:'t1g',turn:48}]);
+});
+test('status idle may arrive before the incremented turn event',async()=>{
+ const tracker=new ChatAttention(),calls=[];
+ const write=(_address,turn)=>calls.push(turn);
+ await tracker.update({...terminal,status:'idle',turn:4,labels:{'herdr.seen':'4'}},shown,write);
+ await tracker.update({...terminal,status:'idle',turn:5,labels:{'herdr.seen':'4'}},shown,write);
+ assert.deepEqual(calls,[5]);
+});
+test('core status objects are normalized without acknowledging working or error',async()=>{
+ const calls=[];
+ for(const state of ['working','blocked','error'])await new ChatAttention().update({...terminal,status:{state}},shown,()=>calls.push(state));
+ assert.deepEqual(calls,[]);
+ await new ChatAttention().update({...terminal,status:{state:'idle'}},shown,()=>calls.push('idle'));
+ assert.deepEqual(calls,['idle']);
+});
+test('an idle but unread background conversation stays unread',async()=>{
+ let calls=0;await new ChatAttention().update({...terminal,status:'idle'},{...shown,active:false},()=>calls++);assert.equal(calls,0);
+});

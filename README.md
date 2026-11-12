@@ -204,3 +204,8 @@ foreground, visible Chat with a loaded conversation acknowledges completed
 turns once. Hidden/background views and unresolved sessions do not mark them
 read, and continuous polling does not override another client's mark-unread
 until the conversation is viewed again.
+
+Note that `terminals().status` is the raw agent phase (often `idle` after
+completion), whereas the sidebar's `done` is derived from unread turns. Chat
+acknowledges raw `idle` as well as `done`, and handles the status event arriving
+before the incremented turn event.
