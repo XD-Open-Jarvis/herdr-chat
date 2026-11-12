@@ -2291,30 +2291,30 @@ export default class Chat extends View {
     const stats = (added,removed) => h_flex().gap(6).flex_none().text_size(12.5)
       .when(added!=null,el=>el.child(div().text_color(t.done).child(`+${added}`)))
       .when(removed!=null,el=>el.child(div().text_color(t.ansi1).child(`−${removed}`)));
-    let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center()
+    const title = div().id(`preview-change-${entry.key}`).truncate().text_size(14).font_semibold().cursor_pointer()
+      .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx))
+      .child(entry.files.length===1?`${entry.files[0].operation==='delete'?'Deleted':entry.files[0].operation==='add'?'Added':'Edited'} ${overview.labels[0]}`:`Edited ${entry.files.length} files`);
+    let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center().bg(t.chrome)
       .child(div().size(36).flex_none().rounded(10).when(settings().dark,el=>el.bg(t.chrome)).flex().items_center().justify_center()
         .child(svg("mods/chat/icons/edit.svg").size(20).text_color(t.muted)))
       .child(v_flex().flex_1().min_w(0).gap(3)
-        .child(div().id(`preview-change-${entry.key}`).truncate().text_size(14).font_semibold().cursor_pointer()
-          .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx))
-          .child(entry.files.length===1?`${entry.files[0].operation==='delete'?'Deleted':entry.files[0].operation==='add'?'Added':'Edited'} ${overview.labels[0]}`:`Edited ${entry.files.length} files`))
+        .child(entry.files.length===1?this.changeHover(`heading-${entry.key}`,title,entry.files[0],entry.key,t):title)
         .child(stats(overview.added,overview.removed)))
       .child(this.button(`diff-toggle-${entry.key}`,"View changes",(_event,cx)=>this.openChanges(entry,cx),t)
         .bg(t.background).border_1().border_color(t.input).rounded(10).py(6));
-    if(entry.files.length===1)heading=this.changeHover(`heading-${entry.key}`,heading,entry.files[0],entry.key,t);
-    return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(t.input).overflow_hidden()
-      .when(settings().dark,el=>el.bg(t.raised))
+    return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(settings().dark?t.input:t.border).overflow_hidden()
       .on_size_change((size,cx)=>{this.changeWidths??={};if(this.changeWidths[entry.key]!==size.width){this.changeWidths[entry.key]=size.width;cx.notify();}})
       .child(heading)
       .when(entry.files.length>1,el=>el.child(v_flex().border_t(1).border_color(t.border)
         .children(files.map((file,index)=>{
           const id=`${entry.key}-${index}`;
-          const row=h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center().cursor_pointer()
+          const row=h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center()
             .when(index===files.length-1&&(entry.files.length<=3||expanded),el=>el.rounded_b(11))
-            .hover(style=>style.bg(t.hover)).on_click((_event,cx)=>this.openChanges(entry,cx,index))
-            .child(div().flex_1().min_w(0).truncate().text_size(13).child(overview.labels[index]))
+            .child(div().flex_1().min_w(0).child(this.changeHover(id,div().w_auto().truncate().text_size(13).cursor_pointer()
+              .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx,index))
+              .child(overview.labels[index]),file,entry.key,t)))
             .child(stats(file.added,file.removed));
-          return this.changeHover(id,row,file,entry.key,t);
+          return row;
         }))))
       .when(entry.files.length>3,el=>el.child(h_flex().id(`more-${entry.key}`).px(12).py(9).gap(8).items_center().border_t(1).border_color(t.border).rounded_b(11).cursor_pointer()
         .hover(style=>style.bg(t.hover)).text_size(12.5).on_click((_event,cx)=>this.toggleCard(listKey,cx))

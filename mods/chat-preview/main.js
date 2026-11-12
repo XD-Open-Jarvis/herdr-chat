@@ -7,7 +7,7 @@ import {diffLines,diffGroups} from "./diff.js";
 const LANG={md:"markdown",markdown:"markdown",json:"json",js:"javascript",mjs:"javascript",jsx:"javascript",ts:"typescript",tsx:"typescript",py:"python",rs:"rust",go:"go",sh:"bash",yaml:"yaml",yml:"yaml",toml:"toml",html:"html",css:"css"};
 const escape=text=>text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 export default class Preview extends View {
- init(){this.generation=0;this.loaded=null;this.code=null;this.text=null;this.error=null;}
+ init(){this.generation=0;this.loaded=null;this.code=null;this.text=null;this.error=null;this.diffCollapsed=new Set();}
  current(){
   const tab=spaces().find(space=>space.active)?.tabs?.find(tab=>tab.active)?.id;
   const pane=previewPane(layout(),panes(),tab,focused()?.pane);
@@ -48,6 +48,7 @@ export default class Preview extends View {
   if(this.collectionId!==identity){
    this.collectionId=identity;this.diffHeights=[];this.diffOffset=0;this.diffViewport=400;
    this.diffJump=Math.max(0,request.changes.findIndex(file=>file.path===request.change?.path));
+   this.diffCollapsed.delete(request.change?.path);
   }
   const files=request.changes;
   let position=collectionPosition(files,this.diffHeights,this.diffOffset,this.diffViewport);
@@ -55,18 +56,24 @@ export default class Preview extends View {
   this.diffOffset=position.offset;
   const button=(id,text,action)=>div().id(id).px(8).py(5).rounded(6).cursor_pointer().text_size(12).text_color(t.muted).hover(s=>s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
   const header=(file,index,sticky=false)=>h_flex().h(FILE_HEADER).flex_none().w_full().px(12).gap(8).items_center().bg(t.background).border_b(1).border_color(t.border)
-   .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(file.path).child(file.path.split(/[\\/]/).at(-1)))
+   .cursor_pointer().on_click((_event,cx)=>{if(this.diffCollapsed.has(file.path)){this.diffCollapsed.delete(file.path);this.diffHeights[index]=undefined;}else{this.diffCollapsed.add(file.path);this.diffHeights[index]=FILE_HEADER;}cx.notify();})
+   .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(file.path)
+    .child(`${this.diffCollapsed.has(file.path)?'▸':'▾'} ${file.path.split(/[\\/]/).at(-1)}`))
    .when(file.added!=null,el=>el.child(div().text_size(12).text_color(t.ansi2).child(`+${file.added}`)))
    .when(file.removed!=null,el=>el.child(div().text_size(12).text_color(t.ansi1).child(`−${file.removed}`)))
-   .child(button(`collection-file-${sticky?'sticky':index}`,"File",()=>this.update(key,{file:file.file??file.path,change:file,mode:"source"})));
+   .child(button(`collection-file-${sticky?'sticky':index}`,"File",(event,cx)=>{event.stop_propagation();this.update(key,{file:file.file??file.path,change:file,mode:"source"});}));
   const colors={added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
   const content=v_flex().absolute().left(0).right(0).top(-position.offset)
-   .children(files.map((file,index)=>v_flex().w_full().min_w(0)
-    .on_size_change((size,cx)=>{if(this.diffHeights[index]!==size.height){this.diffHeights[index]=size.height;cx.notify();}})
-    .child(header(file,index))
-    .child(v_flex().py(12).gap(0).children(diffGroups(diffLines(file)).map((group,i)=>div().px(12).w_full().min_w(0)
-     .child(TextView.html(`collection-${identity}-${index}-${i}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
-      .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))))));
+   .children(files.map((file,index)=>{
+    const row=v_flex().w_full().min_w(0)
+     .on_size_change((size,cx)=>{if(this.diffHeights[index]!==size.height){this.diffHeights[index]=size.height;cx.notify();}})
+     .child(header(file,index));
+    if(!this.diffCollapsed.has(file.path))row.child(v_flex().py(12).gap(0)
+     .children(diffGroups(diffLines(file)).map((group,i)=>div().px(12).w_full().min_w(0)
+      .child(TextView.html(`collection-${identity}-${index}-${i}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
+       .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
+    return row;
+   }));
   const viewport=div().id(`collection-scroll-${identity}`).relative().flex_1().min_h(0).overflow_hidden()
    .on_size_change((size,cx)=>{if(this.diffViewport!==size.height){this.diffViewport=size.height;cx.notify();}})
    .on_scroll_wheel((event,cx)=>{cx.stop_propagation();this.diffJump=null;const next=collectionPosition(files,this.diffHeights,this.diffOffset-event.delta.y,this.diffViewport);if(next.offset!==this.diffOffset){this.diffOffset=next.offset;cx.notify();}})
