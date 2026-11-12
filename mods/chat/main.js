@@ -21,7 +21,7 @@ import { resolveSession } from "./session.js";
 import { codexTitleIdentity, titleMatchesFile } from "./title.js";
 import { bindingKey, chooseBinding } from "./binding.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
-import { catalog, launchArgv, modelName, switchModel } from "./models.js";
+import { catalog, launchArgv, modelName, switchModel, CLAUDE_EFFORTS } from "./models.js";
 import { emojify, emojiMatches } from "./emoji.js";
 import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
@@ -734,7 +734,6 @@ export default class Chat extends View {
   hostCommand(cmd, args, cx) {
     const clear = () => { this.input.set_value(""); return true; };
     if (cmd.action === "model" && !args && this.models?.length) return this.openSub("model");
-    if (cmd.action === "effort" && !args && this.current().kind === "claude") { this.openEffort(cx); return clear(); }
     if ((cmd.action === "model" || cmd.action === "effort") && !args) { this.showModels = true; return clear(); }
     if (cmd.action === "status" || cmd.action === "usage") { this.hostCard(cmd.action, cx); return clear(); }
     if (["memory", "hooks", "mcp", "skills", "plugins", "config"].includes(cmd.action) && !args) { this.infoCard(cmd.action, cx, cmd.name); return clear(); }
@@ -1788,19 +1787,6 @@ export default class Chat extends View {
     });
   }
 
-  // Custom/provider model names need not appear in our model catalog.
-  // Let the running Claude Code supply its supported effort levels.
-  openEffort(cx) {
-    this.showModels = false;
-    cx.spawn(async cx => {
-      try {
-        if (await this.deliver("/effort", [], cx)) this.openPanel("/effort", cx);
-      } catch (error) { this.error = String(error?.message ?? error); }
-      cx.notify();
-    });
-    cx.notify();
-  }
-
   // Switches the running session's model or effort.
   applyModel(model, effort, cx) {
     const kind = this.t?.kind ?? agentKind(this.terminal());
@@ -2253,7 +2239,8 @@ export default class Chat extends View {
       .child(div().text_color(t.foreground).child(this.switching ? "Switching…" : modelName(cat?.models, model)))
       .when(Boolean(effort) && !this.switching, (el) => el.child(div().text_color(t.dim).child(effort)))
       .child(svg("mods/chat/icons/chevron-down.svg").size(12).flex_none().self_center().text_color(t.muted));
-    const efforts = cat?.models.find((m) => m.id === model)?.efforts ?? [];
+    const efforts = cat?.models.find((m) => m.id === model)?.efforts
+      ?? (kind === "claude" ? CLAUDE_EFFORTS : []);
     const pick = (m, e) => (_ev, cx) => { this.showModels = false; this.applyModel(m, e, cx); };
     const heading = (text) => div().px(10).pt(8).pb(4).text_size(11).font_semibold().text_color(t.dim).child(text);
     const item = (id, text, selected, action) => h_flex().id(id).px(10).py(5).gap(8).rounded(6).cursor_pointer().text_size(12.5)
@@ -2265,9 +2252,6 @@ export default class Chat extends View {
       .children((cat?.models ?? []).map((m) => item(`mm-${m.id}`, m.name, m.id === model, pick(m.id, null))))
       .when(efforts.length > 0, (el) => el.child(div().h(1).mx(6).my(4).bg(t.border)).child(heading("Effort"))
         .children(efforts.map((e) => item(`me-${e}`, e, e === effort, pick(null, e)))))
-      .when(kind === "claude" && efforts.length === 0, el => el
-        .child(div().h(1).mx(6).my(4).bg(t.border)).child(heading("Effort"))
-        .child(item("me-native", "Adjust effort…", false, (_ev, cx) => this.openEffort(cx))))
       .when(term?.status === "working", (el) => el.child(div().px(10).py(6).text_size(11).text_color(t.dim).child("The agent is busy; a switch waits in its queue.")));
     return Popover.new("model-menu").anchor("bottom_right").open(Boolean(this.showModels))
       .on_open_change((open, cx) => { this.showModels = open; cx.notify(); })

@@ -15,15 +15,18 @@ function setup(kind='claude',model='grok/grok-4.7',efforts=[]) {
  }});
  const Chat=runInNewContext(source+'\nChat',{View:class {},appWindow:()=>({platform:'macos'}),
   div:element,h_flex:element,v_flex:element,svg:element,modelName:(_models,id)=>id,
+  CLAUDE_EFFORTS:["low","medium","high","xhigh","max"],
+  machineOf:()=>null, sleep:()=>{}, switchModel:async(...args)=>{view.switched=args;},
   Popover:{new:element}});
  const view=Object.create(Chat.prototype);
  view.current=()=>({kind,model,effort:'medium',cat:{models:[{id:'claude-opus',name:'Opus',efforts}]}});
- view.openEffort=Chat.prototype.openEffort;
  return {view,texts};
 }
 test('custom Claude Code provider models retain an effort entry without an exact catalog match',()=>{
  const {view,texts}=setup();view.modelMenu({status:'idle'},{});
- assert.ok(texts.includes('Effort'));assert.ok(texts.includes('Adjust effort…'));
+ assert.ok(texts.includes('Effort'));
+ for(const level of ['low','medium','high','xhigh','max'])assert.ok(texts.includes(level));
+ assert.equal(texts.includes('Adjust effort…'),false);
 });
 test('known model effort options remain and Codex never receives the Claude fallback',()=>{
  for(const [kind,model,efforts] of [['claude','claude-opus',['low','high']],['codex','custom',[]]]){
@@ -31,12 +34,10 @@ test('known model effort options remain and Codex never receives the Claude fall
   assert.equal(texts.includes('Adjust effort…'),false);
  }
 });
-test('native effort entry sends /effort once and opens its live picker only after success',async()=>{
- for(const success of [true,false]){
-  const {view}=setup();const tasks=[],calls=[];const cx={notify(){},spawn(fn){tasks.push(()=>fn(cx));}};
-  view.showModels=true;view.deliver=async(...args)=>{calls.push(args.slice(0,2));return success;};
-  view.openPanel=(command)=>calls.push(command);
-  view.openEffort(cx);assert.equal(view.showModels,false);await tasks[0]();
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)),success ? [['/effort',[]],'/effort'] : [['/effort',[]]]);
- }
+test('effort-only selection keeps a custom provider model and updates the selected effort',async()=>{
+ const {view}=setup();const tasks=[];const cx={notify(){},spawn(fn){tasks.push(()=>fn(cx));}};
+ view.t={kind:'claude',model:'grok/grok-4.7'};Object.defineProperty(view,'term',{value:'t1'});
+ view.applyModel(null,'high',cx);await tasks[0]();
+ assert.deepEqual(Array.from(view.switched.slice(0,4)),['t1','claude',null,'high']);
+ assert.equal(view.chosen.model,'grok/grok-4.7');assert.equal(view.chosen.effort,'high');
 });

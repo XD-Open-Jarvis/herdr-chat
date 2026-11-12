@@ -9,7 +9,7 @@ export const CLAUDE_MODELS = [
   { id: "claude-fable-5-1", name: "Fable 5.1", alias: "fable" },
   { id: "claude-haiku-5-5", name: "Haiku 5.5", alias: "haiku" },
 ];
-const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 const cat = async (path, on) =>
   (await exec("sh", ["-c", 'cat "$HOME/$1" 2>/dev/null', "sh", path], { on })).stdout;
