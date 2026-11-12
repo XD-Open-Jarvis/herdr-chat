@@ -2240,7 +2240,7 @@ export default class Chat extends View {
         .on_click((_event, cx) => { open ? this.open.delete(id) : this.open.add(id); cx.notify(); })
         .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none())
         .child(div().flex_none().text_size(12.5).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).tooltip(i.summary).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
         .when(i.changes?.length === 1 && i.changes[0].added != null && !i.error, el => el
           .child(div().text_size(11.5).text_color(t.done).child(`+${i.changes[0].added}`))
           .child(div().text_size(11.5).text_color(t.ansi1).child(`−${i.changes[0].removed ?? 0}`)))
