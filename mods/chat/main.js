@@ -20,7 +20,7 @@ import { openChat as openConversation, showTerminal, presentationPane, presentat
 import { resolveSession } from "./session.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel } from "./models.js";
-import { emojify, PICKER, emojiMatches } from "./emoji.js";
+import { emojify, emojiMatches } from "./emoji.js";
 import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
@@ -2108,9 +2108,6 @@ export default class Chat extends View {
           .child(div().id(`rm-${n}`).absolute().top(-6).right(-6).size(18).rounded_full().flex().items_center().justify_center()
             .bg(t.foreground).text_color(t.background).text_size(11).cursor_pointer().hover((s) => s.opacity(0.8))
             .on_click((_e, cx) => { this.attach.splice(n, 1); cx.notify(); }).child("×"))))))
-      .when(Boolean(this.showEmoji), (el) => el.child(h_flex().px(10).pt(10).gap(2).flex_wrap().children(PICKER.map((e, n) =>
-        div().id(`emoji-${n}`).size(30).rounded(6).flex().items_center().justify_center().text_size(17).cursor_pointer()
-          .hover((s) => s.bg(t.hover)).on_click((_ev, cx) => { this.input.replace(e); this.input.focus(); cx.notify(); }).child(e)))))
       .child(div().id("composer").w_full()
         .when(Boolean(this.slash()), (el) => el.key_context(this.slash().nav ? "ChatMenuNav" : "ChatMenu"))
         .when(!this.slash() && (Boolean(this.emojiMenu()) || Boolean(this.mentionMenu())), (el) => el.key_context("ChatMenu"))
@@ -2127,8 +2124,7 @@ export default class Chat extends View {
         .when(Boolean(chosen?.hint), (r) => r.child(div().flex_none().child(chosen.hint)))
         .child(div().flex_1().min_w(0).truncate().child(chosen?.desc ?? ""))))
       .child(h_flex().px(8).pb(8).gap(4).items_center()
-        .child(icon("attach", svg("mods/chat/icons/attachment.svg").size(16), (_e, cx) => this.pickFiles(cx)).tooltip("Attach files"))
-        .child(icon("emoji", "☺", (_e, cx) => { this.showEmoji = !this.showEmoji; cx.notify(); }, this.showEmoji).tooltip("Insert emoji"))
+        .child(icon("attach", svg("mods/chat/icons/attachment.svg").size(14), (_e, cx) => this.pickFiles(cx)).size(26).tooltip("Attach files"))
         .child(div().flex_1())
         .when(!this.dialog && Boolean(this.term), (el) => el.child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
         .child(div().id("send").flex_none().size(32).rounded_full().flex().items_center().justify_center().cursor_pointer()
