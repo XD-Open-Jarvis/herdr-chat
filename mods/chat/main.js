@@ -29,6 +29,7 @@ import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } f
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
+import { fileLink, previewKey, previewLayout } from "./preview.js";
 import { diffLines, diffGroups } from "./diff.js";
 import { compactSettings, toolSummary, summaryLine, commandPreview } from "./display.js";
 import { toolDetails, withChanges, changeOverview } from "./activity.js";
@@ -1996,8 +1997,32 @@ export default class Chat extends View {
       .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)));
   }
 
+  openFilePreview(url, cx, change = null) {
+    const pane = this.myPane(), term = this.terminal();
+    const key = previewKey(pane);
+    const target = fileLink(url, term?.foreground?.cwd ?? term?.cwd);
+    if (!target || !key) { if (!change) cx.open_url(url); return; }
+    const pages = shared("chat.preview") ?? {};
+    setShared("chat.preview", {...pages, [key]: {...target, on: machineOf(term.address), change,
+      mode: change ? "diff" : /\.(md|markdown|mdown)$/i.test(target.file) ? "preview" : "source", revision: Date.now()}});
+    cx.spawn(async () => {
+      try {
+        const current = layout();
+        const find = (node, id) => node?.id === id ? node : (node?.children ?? []).map(child => find(child, id)).find(Boolean);
+        if (!find(current, "chat-preview")) await herdr("layout.set", {layout: previewLayout(current)});
+        else {
+          await herdr("layout.select", {stack: "panel-body", child: "chat-preview"});
+          if (find(current, "panel")?.hidden) await herdr("layout.resize", {id: "panel", px: 520});
+          await herdr("layout.show", {id: "panel"});
+        }
+      }
+      catch(error) { notify({title:"Could not open file preview",body:String(error?.message ?? error),level:"error"}); }
+    });
+  }
+
   markdown(id, text) {
-    return TextView.markdown(id, text).selectable(true);
+    return TextView.markdown(id, text).selectable(true)
+      .on_link_click((url, cx) => this.openFilePreview(url, cx));
   }
 
   entry(e, t, last, nextKind = null) {
@@ -2247,7 +2272,9 @@ export default class Chat extends View {
         .child(div().size(36).flex_none().rounded(10).bg(t.chrome).flex().items_center().justify_center()
           .child(svg("mods/chat/icons/edit.svg").size(20).text_color(t.muted)))
         .child(v_flex().flex_1().min_w(0).gap(3)
-          .child(div().truncate().text_size(14).font_semibold().child(entry.files.length === 1
+          .child(div().id(`preview-change-${entry.key}`).truncate().text_size(14).font_semibold().cursor_pointer()
+            .hover(style => style.text_color(t.accent))
+            .on_click((_event, cx) => { if (entry.files.length === 1) this.openFilePreview(entry.files[0].path, cx, entry.files[0]); else this.toggleCard(diffKey, cx, allDiffs); }).child(entry.files.length === 1
             ? `${entry.files[0].operation === "delete" ? "Deleted" : entry.files[0].operation === "add" ? "Added" : "Edited"} ${overview.labels[0]}`
             : `Edited ${entry.files.length} files`))
           .child(stats(overview.added, overview.removed).tooltip("Recorded additions and deletions in this turn")))
@@ -2262,7 +2289,8 @@ export default class Chat extends View {
             .child(h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center().cursor_pointer()
               .hover(style => style.bg(t.hover))
               .on_click((_e, cx) => { this.toggleCard(id, cx); })
-              .child(h_flex().flex_1().min_w(0).text_size(13).tooltip(file.path)
+              .child(h_flex().id(`preview-file-${id}`).flex_1().min_w(0).text_size(13).cursor_pointer()
+                .hover(style => style.text_color(t.accent)).on_click((_event, cx) => { cx.stop_propagation(); this.openFilePreview(file.path, cx, file); })
                 .when(slash >= 0, row => row.child(div().flex_none().text_color(t.muted).child(label.slice(0, slash + 1))))
                 .child(div().min_w(0).truncate().child(label.slice(slash + 1))))
               .child(stats(file.added, file.removed)))

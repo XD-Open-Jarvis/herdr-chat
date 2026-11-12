@@ -190,6 +190,13 @@
                         "mod": "changes"
                       },
                       "children": []
+                    },
+                    {
+                      "id": "chat-preview",
+                      "type": "block",
+                      "content": {
+                        "mod": "chat-preview"
+                      }
                     }
                   ],
                   "active": "files"
@@ -200,7 +207,8 @@
               },
               "min": 280,
               "max": 900,
-              "hidden": true
+              "hidden": true,
+              "resizable": true
             }
           ],
           "padding": 8,

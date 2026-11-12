@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
-MODS = ['chat', 'chat-file', 'chat-pane', 'chat-tabs', 'spaces-chat']
+MODS = ['chat', 'chat-file', 'chat-preview', 'chat-pane', 'chat-tabs', 'spaces-chat']
 
 def files():
     result = [Path('layouts/chat.json'), Path('layouts/chat.svg'),
@@ -45,7 +45,8 @@ def matches(path, home):
                 and nodes['conversation-view']['type'] == 'stack'
                 and nodes['conversation-chat']['content']['mod'] == 'chat'
                 and nodes['conversation-chat']['content']['props']['presentation'] is True
-                and nodes['conversation-header']['content']['mod'] == 'chat-pane')
+                and nodes['conversation-header']['content']['mod'] == 'chat-pane'
+                and nodes['chat-preview']['content']['mod'] == 'chat-preview')
     except (OSError, ValueError, KeyError, TypeError):
         return False
 

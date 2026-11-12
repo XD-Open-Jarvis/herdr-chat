@@ -12,6 +12,7 @@ Based on [naruse/herdr-chat](https://github.com/naruse/herdr-chat), with the ori
 - A local follow-up queue. Pending messages survive layout reloads; delivery failures stay visible for manual retry. **Instant** sends a selected item immediately.
 - Codex fork history and conservative session binding. New Codex sessions launched from Chat include a terminal-title thread ID. Existing sessions use screen evidence or a visible `/status` panel when needed. See [identity details](docs/codex-title-identity.md).
 - Remote terminals resolve through their owning pane and tab, so connection aliases can differ between clients.
+- Read-only file sidebar: click a Markdown file link or a changed filename to open Markdown Preview / Source or Diff / File, with per-tab state and remote file reads.
 - Bounded file watching and suspended Chat work while TUI or another tab is visible.
 
 ## Install
@@ -26,7 +27,7 @@ cd herdr-chat
 python3 scripts/install.py --install
 ```
 
-For an existing installation, update the checkout and run `python3 scripts/install.py --update`. The installer validates the five mods first, backs up files it replaces under `~/.config/herdr-app/backups/`, merges a nonconflicting New Chat shortcut, and selects the Chat layout. It does not migrate sessions or change core documents. A second Mac must connect to the target machine separately.
+For an existing installation, update the checkout and run `python3 scripts/install.py --update`. The installer validates the six mods first, backs up files it replaces under `~/.config/herdr-app/backups/`, merges a nonconflicting New Chat shortcut, and selects the Chat layout. It does not migrate sessions or change core documents. A second Mac must connect to the target machine separately.
 
 To inspect an installation without changing it, run `python3 scripts/install.py --diagnose`. `HERDR_APP_HOME` or `--home` selects another app home.
 
@@ -34,13 +35,14 @@ To inspect an installation without changing it, run `python3 scripts/install.py 
 
 Chat is a local presentation of the original terminal pane. Switching to Chat does not split, zoom, park, or close that pane. Other clients, including mobile, continue to see the terminal. The left sidebar has separate **New Chat** and **New Space** buttons. Images open in an internal Herdr window with zoom, pan, and Escape to close.
 
-The five mods are `chat`, `chat-file`, `chat-pane`, `chat-tabs`, and `spaces-chat`. See [RECIPE.md](RECIPE.md) for the layout contract. The package includes `layouts/chat.json`, `layouts/chat.svg`, two theme files, and a keybinding recipe.
+The six mods are `chat`, `chat-file`, `chat-preview`, `chat-pane`, `chat-tabs`, and `spaces-chat`. See [RECIPE.md](RECIPE.md) for the layout contract. The package includes `layouts/chat.json`, `layouts/chat.svg`, two theme files, and a keybinding recipe.
 
 ## Current limitations
 
 - ChatUI currently supports Claude Code and Codex transcripts. Other agents, including Grok, need a provider adapter.
 - An existing Codex session may require opening `/status` in TUI to establish its exact identity. The layout does not guess from the newest log file.
 - The queue is local to this Chat client. Automatic delivery requires Herdr to remain running; other clients have separate queues.
+- File previews are read-only and refresh on request. Diff shows recorded patch fragments; File shows current disk contents. Source previews are limited to 400,000 characters, and link line numbers are displayed in the path but do not yet move the editor cursor.
 - Color alpha values are supported by the layout, but the current Herdr desktop window does not provide true desktop-through transparency.
 
 ## Development and attribution
