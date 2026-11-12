@@ -2375,13 +2375,15 @@ export default class Chat extends View {
         return v_flex().id("root").size_full().bg(t.background).text_color(t.dim).p(24)
           .child("Loading conversation…");
       }
-      return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).p(24).gap(12)
-        .child("The current conversation could not be identified confidently.")
-        .child("In TUI, run /status and leave its result visible. Then return here and check again.")
-        .child(h_flex().w_full().flex_none().gap(8).items_center()
-          .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t).w_auto())
-          .child(this.button("identify-retry", "Check again", (_e, cx) => { this.sig = null; this.check(cx); cx.notify(); }, t).w_auto()))
-        .when(Boolean(this.error), el => el.child(String(this.error)));
+      return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground)
+        .p(24).gap(12).items_center().justify_center().text_center()
+        .child(h_flex().flex_none().gap(8).items_center().justify_center()
+          .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t, true).w_auto().px(16).py(9).text_size(14))
+          .child(this.button("identify-retry", "Check again", (_e, cx) => { this.sig = null; this.check(cx); cx.notify(); }, t).w_auto().px(16).py(9).text_size(14)))
+        .child(v_flex().gap(4).items_center().text_center().text_size(12).text_color(t.muted)
+          .child("We couldn’t identify this conversation automatically.")
+          .child("Run /status in TUI, leave the result visible, then return and check again."))
+        .when(Boolean(this.error), el => el.child(div().text_size(12).text_color(t.dim).child(String(this.error))));
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(15)
       .key_context(this.presentation ? "ChatRoot ChatPresentation" : "ChatRoot")
