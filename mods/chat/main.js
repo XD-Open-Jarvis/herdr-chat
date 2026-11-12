@@ -187,7 +187,9 @@ export default class Chat extends View {
     // read-only fork of it, so the agent is never interrupted.
     this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
     this.menuSel = 0;
-    this.cfg = { kind: shared("chat.kind") ?? "claude", machine: p.machine ?? null, folder: null, model: null, effort: null };
+    const machine = p.machine !== undefined ? p.machine || null : this.dialog ? activeSpace()?.machine || null : null;
+    this.cfg = { kind: shared("chat.kind") ?? "claude", machine,
+      folder: this.dialog ? p.folder ?? this.defaultFolder(machine) : null, model: null, effort: null };
 
     this.input = TextareaState.new({ placeholder: this.dialog ? "What should the agent do? (optional)" : "Ask anything · / for commands" });
     this.input.set_auto_grow(1, 10);
@@ -1541,7 +1543,14 @@ export default class Chat extends View {
   // The shown space's folder when it's on that machine, else the home folder there.
   defaultFolder(machine) {
     const s = activeSpace();
-    return s && (s.machine ?? null) === machine && s.folder ? s.folder : machine ? "" : home();
+    if (s && (s.machine || null) === (machine || null)) {
+      // Match the Spaces sidebar: the first terminal's current directory,
+      // falling back to the directory where the space was created.
+      const tabs = new Set((s.tabs ?? []).map(tab => tab.id));
+      const folder = panes().find(pane => tabs.has(pane.tab) && pane.terminal && pane.cwd)?.cwd || s.folder;
+      if (folder) return folder;
+    }
+    return machine ? "" : home();
   }
 
   // Opens a local conversation view for an agent already running.
