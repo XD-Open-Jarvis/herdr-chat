@@ -127,7 +127,7 @@ export default class ChatFile extends View {
           .rounded(8).bg(t.popover).border_1().border_color(t.border).shadow_md()
           .on_scroll_wheel((_event, cx) => cx.stop_propagation())
         .child(button("image-minus", "−", "Zoom out", cx => this.zoomImage(scale / 1.25, cx)))
-        .child(div().w(48).flex_none().text_size(11.5).text_color(t.muted).child(`${Math.round(scale * 100)}%`))
+        .child(div().w(48).h(28).flex_none().flex().items_center().justify_center().text_size(11.5).text_color(t.muted).child(`${Math.round(scale * 100)}%`))
         .child(button("image-plus", "+", "Zoom in", cx => this.zoomImage(scale * 1.25, cx)))
         .child(button("image-original", "100%", "Actual size", cx => this.zoomImage(1, cx)))
         .child(button("image-fit", "Fit", "Fit to window", cx => {
