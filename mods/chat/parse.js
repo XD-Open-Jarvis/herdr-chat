@@ -17,7 +17,17 @@ export function userAttachments(text) {
   const files = [];
   for (;;) {
     const match = /^\s*(\\?\{[^\r\n]*?\\?\})/.exec(text);
-    if (!match) break;
+    if (!match) {
+      // The composer sends cached attachment paths as shell-quoted tokens.
+      // Recognize Herdr-managed file locations, never arbitrary prose paths.
+      const token = /^\s*(?:'((?:[^']|'\\'')*)'|"([^"]+)"|(\S+))/.exec(text);
+      const path = (token?.[1] ?? token?.[2] ?? token?.[3] ?? "").replace(/'\\''/g, "'");
+      if (!/(?:^|\/)(?:herdr-app\/data\/chat\/files|herdr-core\/[^/]+\/files)\//.test(path)
+        || !/^(?:\/|[A-Za-z]:[\\/])/.test(path)) break;
+      files.push({ path, bytes: null, name: path.split(/[\\/]/).pop() });
+      text = text.slice(token[0].length).trimStart();
+      continue;
+    }
     let file;
     try { file = JSON.parse(match[1].replace(/\\([{}])/g, "$1")); } catch { break; }
     if (!file || typeof file.path !== "string" || !/^(?:\/|[A-Za-z]:[\\/])/.test(file.path)
@@ -160,16 +170,20 @@ export class Transcript {
     else this.push(card);
   }
 
+  // An optimistic user message is already visible, even if its log record is
+  // delayed. New output must not merge into the group above that message.
+  markInput() { this.breakAfter = this.last()?.key; }
+
   assistant(text) {
     if (!text?.trim()) return;
     const prev = this.last();
-    if (prev?.kind === "assistant") prev.text += "\n\n" + text;
+    if (prev?.kind === "assistant" && prev.key !== this.breakAfter) prev.text += "\n\n" + text;
     else this.push({ kind: "assistant", text });
   }
 
   toolUse(id, name, input) {
     let group = this.last();
-    if (group?.kind !== "tools") group = this.push({ kind: "tools", items: [] });
+    if (group?.kind !== "tools" || group.key === this.breakAfter) group = this.push({ kind: "tools", items: [] });
     const item = { id, name, summary: summarize(input), result: null, error: false, images: [] };
     group.items.push(item);
     if (id) this.tools.set(id, item);

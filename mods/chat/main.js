@@ -26,6 +26,7 @@ import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
+import { withPending } from "./timeline.js";
 import { herdr, chatTab, away, hide, show, switchView } from "./backstage.js";
 
 const ASK_FIRST = "Answer the question above first.";
@@ -1372,14 +1373,13 @@ export default class Chat extends View {
     const status = this.terminal()?.status;
     const claude = (this.t?.kind ?? agentKind(this.terminal())) === "claude";
     const waiting = (status === "working" || status === "blocked") && this.inQueue(p);
-    const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
-    const max = Math.max(120, Math.floor((this.width - 2 * side) * 0.70));
     const act = (id, label, fn) => div().id(id).px(8).py(2).rounded(6).cursor_pointer().text_color(t.foreground)
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { fn(); cx.notify(); }).child(label);
-    return v_flex().w_full().items_end().gap(4).child(
-      v_flex().w_auto().max_w(max).min_w(0).flex_none().gap(6).px(14).py(10).rounded(14).bg(t.raised).border_1().border_color(t.border).opacity(0.75)
-        .when(p.files > 0, (el) => el.child(div().text_size(12).text_color(t.dim).child(`${p.files} file${p.files > 1 ? "s" : ""} attached`)))
-        .when(Boolean(p.text), (el) => el.child(this.markdown(`pending-${i}`, emojify(p.text)))))
+    const attachments = p.attachments ?? [];
+    return v_flex().w_full().items_end().gap(4)
+      .child(this.entry({ kind: "user", key: `pending-${p.at}-${i}`, text: p.text,
+        images: attachments.filter(file => file.image).map(file => file.image),
+        files: attachments.filter(file => !file.image).map(file => ({ path: file.path, name: file.name, bytes: null })) }, t, false))
       .child(h_flex().gap(4).items_center().text_size(11.5).text_color(t.dim)
         // Codex doesn't queue: a message sent while it works goes straight into
         // the running turn as guidance, so there's nothing to send now or edit.
@@ -1474,11 +1474,17 @@ export default class Chat extends View {
     if (this.idleAsk) { this.error = ASK_FIRST; return cx.notify(); }
     // A lone "/" would open the terminal's own menu and run its first command.
     if (!this.term || ((!text || text === "/") && !files.length)) { if (!files.length) this.input.set_value(""); return; }
+    const attachments = this.attach.map(attachment => ({ ...attachment }));
     this.input.set_value("");
     this.attach = [];
     this.off = 0;
     // Slash commands and ! lines are logged as notes, not messages: no bubble for them.
-    if (!/^[\/!]/.test(text)) this.pending.push({ text, files: files.length, users: this.userCount(), at: Date.now() });
+    if (!/^[\/!]/.test(text)) {
+      this.pending.push({ text, files: files.length, attachments, users: this.userCount(),
+        afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now() });
+      this.t?.markInput();
+    }
+    this.stream = null; this.running = null;
     cx.spawn(async (cx) => this.deliver(text, files, cx));
     // A command that opens a picker or panel there: show it here, live.
     if (cmd?.picker || /^\/\S+/.test(text)) this.openPanel(text, cx, !cmd?.picker);
@@ -1692,7 +1698,8 @@ export default class Chat extends View {
             .child(svg("mods/chat/icons/attachment.svg").size(16).flex_none().text_color(t.muted))
             .child(v_flex().min_w(0).gap(2)
               .child(div().truncate().text_size(12).child(file.name))
-              .child(div().text_size(10.5).text_color(t.dim).child(file.bytes < 1024 ? `${file.bytes} B` : `${Math.round(file.bytes / 1024)} KB`)))))))
+              .when(Number.isFinite(file.bytes), el => el.child(div().text_size(10.5).text_color(t.dim)
+                .child(file.bytes < 1024 ? `${file.bytes} B` : `${Math.round(file.bytes / 1024)} KB`))))))))
         .when(Boolean(e.text), el => el.child(v_flex().w_auto().max_w(max).min_w(0).flex_none().px(14).py(10).rounded(14).bg(t.raised)
           .child(this.markdown(e.key, emojify(e.text)))))
         .child(h_flex().h(24).gap(4).when(on, (el) => el
@@ -1962,7 +1969,7 @@ export default class Chat extends View {
         .when(Boolean(this.showModes), (el) => el.bg(t.hover))
         .text_color(risky ? t.blocked : this.showModes ? t.foreground : t.muted)
         .hover((s) => s.bg(t.hover).text_color(risky ? t.blocked : t.foreground))
-        .child(div().child(now?.label ?? "Permissions")).child(svg("mods/chat/icons/chevron-down.svg").size(16).flex_none().self_center().text_color(t.muted)))
+        .child(div().child(now?.label ?? "Permissions")).child(svg("mods/chat/icons/chevron-down.svg").size(12).flex_none().self_center().text_color(t.muted)))
       .content(menu);
   }
 
@@ -1975,7 +1982,7 @@ export default class Chat extends View {
     const label = h_flex().gap(5).items_center()
       .child(div().text_color(t.foreground).child(this.switching ? "Switching…" : modelName(cat?.models, model)))
       .when(Boolean(effort) && !this.switching, (el) => el.child(div().text_color(t.dim).child(effort)))
-      .child(svg("mods/chat/icons/chevron-down.svg").size(16).flex_none().self_center().text_color(t.muted));
+      .child(svg("mods/chat/icons/chevron-down.svg").size(12).flex_none().self_center().text_color(t.muted));
     const efforts = cat?.models.find((m) => m.id === model)?.efforts ?? [];
     const pick = (m, e) => (_ev, cx) => { this.showModels = false; this.applyModel(m, e, cx); };
     const heading = (text) => div().px(10).pt(8).pb(4).text_size(11).font_semibold().text_color(t.dim).child(text);
@@ -2021,10 +2028,10 @@ export default class Chat extends View {
           .child(`Show earlier (${start})`))))
       .when(start === 0 && Boolean(this.truncated), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().text_size(11.5).text_color(t.dim).child("Older history is in the log but not loaded"))))
-      .children(shown.map((e, n) => this.entry(e, t, n === shown.length - 1)))
+      .children(withPending(shown, this.pending).map((entry, index, entries) => entry.kind === "pending"
+        ? this.queued(entry.message, entry.index, t) : this.entry(entry, t, index === entries.length - 1)))
       .when(Boolean(this.streamShown()), (el) => el.child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true)))
       .when(Boolean(this.running), (el) => el.child(this.runningView(t)))
-      .children(this.pending.map((p, i) => this.queued(p, i, t)))
 ;
 
     const scroll = div().id("scroll").relative().flex_1().min_h(0).overflow_hidden()

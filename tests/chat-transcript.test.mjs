@@ -61,3 +61,26 @@ test('native image blocks and their hc descriptors show the image once',()=>{
  t.feed(JSON.stringify({type:'response_item',payload:{type:'message',role:'user',content:[{type:'input_text',text:'{"bytes":10,"path":"/tmp/a.png"} hello'},{type:'input_image',image_url:'data:image/png;base64,YWJj'}]}}));
  assert.equal(t.entries[0].images.length,1);assert.equal(t.entries[0].images[0].data,'YWJj');assert.equal(t.entries[0].text,'hello');
 });
+test('composer image path is removed from body and becomes a preview',()=>{
+ const path='/Users/jarvis/.config/herdr-app/data/chat/files/1794450521748-paste-1794450521578.png';
+ const e=codex(path+' 停止按钮中的方块太小了')[0];
+ assert.equal(e.text,'停止按钮中的方块太小了');assert.equal(e.images[0].path,path);
+});
+test('quoted composer attachments and core remote paths are extracted',()=>{
+ const a='/Users/name/.config/herdr-app/data/chat/files/my report.pdf',b='/home/user/.local/state/herdr-core/default/files/t1/paste.png';
+ const e=codex(`'${a}' ${b} 请查看附件`)[0];assert.equal(e.text,'请查看附件');assert.equal(e.files[0].path,a);assert.equal(e.images[0].path,b);
+});
+test('managed path only messages retain previews without text',()=>{
+ const e=codex('/Users/name/.config/herdr-app/data/chat/files/a.png')[0];assert.equal(e.text,'');assert.equal(e.images.length,1);
+});
+test('unrelated paths in prose remain visible',()=>{
+ const text='/Users/name/project/example.png is an example path';assert.equal(codex(text)[0].text,text);
+});
+test('new assistant output cannot merge above an optimistic user message',()=>{
+ const t=new Transcript('codex');t.assistant('previous reply');t.markInput();t.assistant('new response');
+ assert.equal(t.entries.length,2);assert.equal(t.entries[0].text,'previous reply');
+});
+test('new tool calls cannot merge above an optimistic user message',()=>{
+ const t=new Transcript('codex');t.toolUse('a','read',{});t.markInput();t.toolUse('b','exec',{});
+ assert.equal(t.entries.length,2);assert.equal(t.entries[0].items.length,1);assert.equal(t.entries[1].items[0].id,'b');
+});
