@@ -51,12 +51,17 @@ export function launchArgv(kind, model, effort, task) {
 // Codex switches for the session only. Claude's /model and /effort also save
 // themselves as the default for new sessions, so its settings file is put back.
 export async function switchModel(term, kind, model, effort, on, sleep) {
-  if (kind === "codex") return hc(["send", term, `/model ${model}${effort ? ` --reasoning=${effort}` : ""}`]);
+  const send = async command => {
+    const result = await hc(["send", term, command]);
+    if (result.code !== 0) throw new Error(result.stderr?.trim() || "Could not apply model settings");
+    return result;
+  };
+  if (kind === "codex") return send(`/model ${model}${effort ? ` --reasoning=${effort}` : ""}`);
   const f = '"$HOME/.claude/settings.json"';
   await exec("sh", ["-c", `cp ${f} ${f}.chat-bak`], { on });
   try {
-    if (model) { await hc(["send", term, `/model ${model}`]); await sleep(1200); }
-    if (effort) { await hc(["send", term, `/effort ${effort}`]); await sleep(1200); }
+    if (model) { await send(`/model ${model}`); await sleep(1200); }
+    if (effort) { await send(`/effort ${effort}`); await sleep(1200); }
   } finally {
     await exec("sh", ["-c", `cp ${f}.chat-bak ${f} && rm -f ${f}.chat-bak`], { on });
   }

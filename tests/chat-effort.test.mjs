@@ -41,3 +41,28 @@ test('effort-only selection keeps a custom provider model and updates the select
  assert.deepEqual(Array.from(view.switched.slice(0,4)),['t1','claude',null,'high']);
  assert.equal(view.chosen.model,'grok/grok-4.7');assert.equal(view.chosen.effort,'high');
 });
+test('switching keeps the model and effort labels visible instead of replacing them with Switching',()=>{
+ const {view,texts}=setup();view.switching=true;view.modelMenu({status:'idle'},{});
+ assert.ok(texts.includes('grok/grok-4.7'));assert.ok(texts.includes('medium'));assert.equal(texts.includes('Switching…'),false);
+});
+test('failed settings delivery keeps the previous selection and exposes the error',async()=>{
+ const {view}=setup();const tasks=[];const cx={notify(){},spawn(fn){tasks.push(()=>fn(cx));}};
+ view.t={kind:'claude',model:'grok/grok-4.7'};Object.defineProperty(view,'term',{value:'t1'});
+ view.switched=null;
+ // The controller must preserve its chosen value when the transport rejects.
+ const method=source.slice(source.indexOf('  applyModel('),source.indexOf('  // The running session\'s model and effort'));
+ const apply=Function('agentKind','machineOf','sleep','switchModel',`return ({${method.trim()}}).applyModel`)(()=> 'claude',()=>null,()=>{},async()=>{throw Error('not delivered');});
+ const previous={model:'grok/grok-4.7',effort:'medium'};view.chosen=previous;
+ apply.call(view,null,'high',cx);await tasks[0]();assert.equal(view.chosen,previous);assert.equal(view.error,'not delivered');assert.equal(view.switching,false);
+});
+test('Claude and Codex transport failures reject model switching instead of reporting success',async()=>{
+ const models=readFileSync(new URL('../mods/chat/models.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/export /g,'');
+ for(const kind of ['claude','codex']){
+  const calls=[];
+  const switchModel=runInNewContext(models+'\nswitchModel',{
+   hc:async args=>{calls.push(args);return {code:1,stderr:'terminal unavailable'};},
+   exec:async()=>({code:0}),CODEX_TITLE_CONFIG:''});
+  await assert.rejects(switchModel('t1',kind,'custom','high',null,async()=>{}),/terminal unavailable/);
+  assert.equal(calls.length,1);
+ }
+});

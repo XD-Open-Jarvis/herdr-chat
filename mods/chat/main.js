@@ -29,6 +29,7 @@ import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } f
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
+import { compactSettings, toolSummary } from "./display.js";
 import { ChatAttention } from "./attention.js";
 import { IdentifyFeedback, identifyKey } from "./identify.js";
 import { Outbox, outboxScope } from "./outbox.js";
@@ -1575,11 +1576,19 @@ export default class Chat extends View {
   }
 
   shown() {
-    let ents = this.t?.entries ?? [];
+    const entries = this.t?.entries ?? [];
+    // Streaming replies/tools mutate in place; only new entries change the
+    // settings projection. Avoid walking the full history on hover or resize.
+    if (this.displaySource !== entries || this.displayCount !== entries.length) {
+      this.displaySource = entries;
+      this.displayCount = entries.length;
+      this.displayEntries = compactSettings(entries);
+    }
+    let ents = this.displayEntries;
     // Searching: only what matches, the newest 200.
     const q = this.searching ? this.search.value().trim().toLowerCase() : "";
     if (q) {
-      const text = (e) => [e.text, e.title, ...(e.items ?? []).flatMap((i) => [i.name, i.summary, i.result])].filter(Boolean).join("\n").toLowerCase();
+      const text = (e) => [e.text, e.title, e.detail, ...(e.items ?? []).flatMap((i) => [i.name, i.summary, i.result])].filter(Boolean).join("\n").toLowerCase();
       ents = ents.filter((e) => text(e).includes(q));
       this.matches = ents.length;
       return { start: Math.max(0, ents.length - 200), ents };
@@ -1799,6 +1808,7 @@ export default class Chat extends View {
         const e = effort ?? cur.effort;
         await switchModel(this.term, kind, m, e, machineOf(this.term), (ms) => sleep(cx, ms));
         this.chosen = { model: model ?? cur.model, effort: e ?? cur.effort, logged: this.t?.model };
+        this.error = null;
       } catch (err) {
         this.error = String(err?.message ?? err);
       }
@@ -1925,7 +1935,7 @@ export default class Chat extends View {
               .child(div().truncate().text_size(12).child(file.name))
               .when(Number.isFinite(file.bytes), el => el.child(div().text_size(10.5).text_color(t.dim)
                 .child(file.bytes < 1024 ? `${file.bytes} B` : `${Math.round(file.bytes / 1024)} KB`))))))))
-        .when(Boolean(e.text), el => el.child(v_flex().w_auto().max_w(max).min_w(0).flex_none().px(14).py(10).rounded(14).bg(t.raised)
+        .when(Boolean(e.text), el => el.child(v_flex().w_auto().max_w(max).min_w(0).flex_none().px(14).py(10).rounded(14).bg(t.raised).text_size(14).line_height("22px")
           .child(this.markdown(e.key, emojify(e.text)))))
         .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copyu-${e.key}`, this.copied === `u-${e.key}` ? "check" : "copy", "Copy", (_e, cx) => this.copyOut(e.text, `u-${e.key}`, cx), t))
@@ -1934,7 +1944,7 @@ export default class Chat extends View {
     if (e.kind === "assistant") {
       // On hover, Copy for the whole reply, in a row under it that's always there.
       const on = this.hovered === e.key && e.key !== "streaming";
-      return v_flex().id(`row-${e.key}`).w_full().gap(4).on_hover(this.hover(e.key))
+      return v_flex().id(`row-${e.key}`).w_full().gap(6).text_size(14.5).line_height("24px").on_hover(this.hover(e.key))
         .child(this.reply(e, t))
         .child(h_flex().h(24).gap(4).when(on, (el) => el
           .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t))));
@@ -1943,11 +1953,11 @@ export default class Chat extends View {
       const at = new Date(e.timestamp);
       const time = Number.isFinite(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : null;
       return h_flex().w_full().gap(8).py(2).items_center().text_size(11.5).text_color(t.dim)
-        .child(div().min_w(0).tooltip(e.detail ?? e.text).child(e.text))
+        .child(div().flex_1().min_w(0).truncate().tooltip(e.detail ?? e.text).child(e.text))
         .when(Boolean(time), el => el.child(div().flex_none().child(`· ${time}`)));
     }
     if (e.kind === "card") return this.card(e, t);
-    if (e.kind === "output") return this.plainOutput(`out-${e.key}`, e.text, t);
+    if (e.kind === "output") return this.plainOutput(`out-${e.key}`, e.text, t, Boolean(e.error));
     if (e.kind === "note") {
       const text = e.text.length > 400 ? e.text.slice(0, 400) + "…" : e.text;
       const note = h_flex().w_full().justify_center().child(
@@ -1974,9 +1984,9 @@ export default class Chat extends View {
     const short = !long && lines.length <= 2;
     return v_flex().w_full().min_w(0).gap(4)
       .child(div().w_full().min_w(0).text_size(!framed ? 12 : short ? 12.5 : 11.5).text_color(error ? t.blocked : t.muted)
-        .when(!short && framed, el => el.px(12).py(8).rounded(8).bg(t.surface).border_1().border_color(error ? t.blocked : t.border))
+        .when(error || (!short && framed), el => el.px(12).py(8).rounded(8).bg(t.surface).border_1().border_color(error ? t.blocked : t.border))
         .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
-        .child(TextView.html(id, `<div>${escaped}</div>`).selectable(true)))
+        .child(TextView.html(id, `<div>${escaped}</div>`).selectable(true).text_color(error ? t.blocked : t.muted)))
       .when(long, el => el.child(div().id(`expand-${id}`).w_auto().flex_none().text_size(11.5).text_color(t.dim).cursor_pointer()
         .hover(style => style.text_color(t.foreground))
         .on_click((_event, cx) => { open ? this.open.delete(`output-${id}`) : this.open.add(`output-${id}`); cx.notify(); })
@@ -2086,10 +2096,8 @@ export default class Chat extends View {
 
   tools(e, t, last) {
     const open = this.open.has(e.key);
-    const names = [...new Set(e.items.map((i) => i.name))];
-    const one = e.items.length === 1 ? e.items[0] : null;
-    const label = one ? `${one.name}${one.summary ? " · " + one.summary : ""}` : `${e.items.length} tool calls · ${names.join(", ")}`;
     const running = last && e.items.some((i) => i.result === null) && this.terminal()?.status === "working";
+    const label = toolSummary(e.items, running);
     const failed = e.items.some((i) => i.error);
     const thumbs = e.items.flatMap((i) => i.images);
     return v_flex().w_full().gap(6)
@@ -2097,7 +2105,7 @@ export default class Chat extends View {
         .hover((s) => s.text_color(t.muted))
         .on_click((_ev, cx) => { open ? this.open.delete(e.key) : this.open.add(e.key); cx.notify(); })
         .child(div().w(10).flex_none().child(open ? "▾" : "▸"))
-        .child(div().flex_1().min_w(0).truncate().child(label))
+        .child(div().flex_1().min_w(0).truncate().tooltip(label).child(label))
         .when(running, (el) => el.child(div().flex_none().text_color(t.working).frames(SPINNER, 90)))
         .when(failed, (el) => el.child(div().flex_none().text_color(t.blocked).child("error"))))
       .when(!open && thumbs.length > 0, (el) => el.child(h_flex().pl(16).gap(6).children(thumbs.map((i) => this.img(i.ref, t, 312, 215)))))
@@ -2235,9 +2243,11 @@ export default class Chat extends View {
     const name = [modelName(cat?.models, model), effort].filter(Boolean).join(" · ");
     if (!name) return div();
     const label = h_flex().gap(5).items_center()
-      .child(div().text_color(t.foreground).child(this.switching ? "Switching…" : modelName(cat?.models, model)))
-      .when(Boolean(effort) && !this.switching, (el) => el.child(div().text_color(t.dim).child(effort)))
-      .child(svg("mods/chat/icons/chevron-down.svg").size(12).flex_none().self_center().text_color(t.muted));
+      .child(div().max_w(180).truncate().text_color(t.foreground).child(modelName(cat?.models, model)))
+      .child(div().w(52).flex_none().text_color(t.dim).child(effort ?? ""))
+      .child(div().size(12).flex_none().flex().items_center().justify_center().text_color(t.muted)
+        .child(this.switching ? div().frames(SPINNER, 90)
+          : svg("mods/chat/icons/chevron-down.svg").size(12)));
     const efforts = cat?.models.find((m) => m.id === model)?.efforts
       ?? (kind === "claude" ? CLAUDE_EFFORTS : []);
     const pick = (m, e) => (_ev, cx) => { this.showModels = false; this.applyModel(m, e, cx); };
@@ -2256,7 +2266,8 @@ export default class Chat extends View {
       .on_open_change((open, cx) => { this.showModels = open; cx.notify(); })
       .trigger(div().id("model").flex_none().h(30).px(10).flex().items_center().rounded_full().cursor_pointer().text_size(12.5)
         .when(Boolean(this.showModels), (el) => el.bg(t.hover)).text_color(this.showModels ? t.foreground : t.muted)
-        .hover((s) => s.bg(t.hover).text_color(t.foreground)).child(label))
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .tooltip(this.switching ? "Applying model settings…" : name).child(label))
       .content(menu);
   }
 
@@ -2266,7 +2277,7 @@ export default class Chat extends View {
     const shown = ents.slice(start);
     // The conversation sits in a centered column as wide as the message card.
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
-    const content = v_flex().id("content").absolute().left(0).right(0).bottom(-this.off).px(side).py(18).gap(16)
+    const content = v_flex().id("content").absolute().left(0).right(0).bottom(-this.off).px(side).py(24).gap(18)
       .on_size_change((size, cx) => {
         // Scrolled up, what's on screen stays put whatever changes below it:
         // new messages, the live card, a streaming reply, a card or an image
@@ -2382,7 +2393,7 @@ export default class Chat extends View {
         .on_action("chat_menu_escape", (_e, cx) => this.menuKey({ keystroke: "escape" }, cx))
         .on_action("chat_menu_right", (_e, cx) => this.menuKey({ keystroke: "right" }, cx))
         .on_key_down((e, cx) => this.menuKey(e, cx))
-        .child(Textarea.new(this.input).w_full().px(16).pt(14).pb(6).border_0().bg(t.background).text_size(13.5).text_color(t.foreground)
+        .child(Textarea.new(this.input).w_full().px(16).pt(14).pb(6).border_0().bg(t.background).text_size(14).line_height("21px").text_color(t.foreground)
           .token((tk) => div().px(6).rounded(6).bg(t.selected).text_color(t.accent).font_medium().child(tk.token.label ?? tk.token.text))))
       .when(Boolean(chosen), (el) => el.child(h_flex().px(16).pb(2).gap(8).text_size(11.5).text_color(t.dim)
         .when(Boolean(chosen?.hint), (r) => r.child(div().flex_none().child(chosen.hint)))
@@ -2391,7 +2402,7 @@ export default class Chat extends View {
         .child(icon("attach", svg("mods/chat/icons/attachment.svg").size(14), (_e, cx) => this.pickFiles(cx)).size(26).tooltip("Attach files"))
         .child(div().flex_1())
         .when(!this.dialog && Boolean(this.term), (el) => el.child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
-        .child(div().id("send").flex_none().size(32).rounded_full().flex().items_center().justify_center().cursor_pointer()
+        .child(div().id("send").flex_none().size(28).rounded_full().flex().items_center().justify_center().cursor_pointer()
           .text_size(stop ? 12 : 16).font_semibold()
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)
           .text_color(stop ? t.accent_foreground : typed || this.dialog ? t.solid_foreground : t.dim)
@@ -2523,7 +2534,7 @@ export default class Chat extends View {
           .child("Run /status in TUI, leave the result visible, then return and check again."))
         .when(Boolean(this.error), el => el.child(div().text_size(12).text_color(t.dim).child(String(this.error))));
     }
-    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(15)
+    return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(14)
       .key_context(this.presentation ? "ChatRoot ChatPresentation" : "ChatRoot")
       .on_action("chat_no_split", (_e, cx) => cx.stop_propagation())
       .on_action("chat_search", (_e, cx) => (this.searching ? this.closeSearch(cx) : this.openSearch(cx)))

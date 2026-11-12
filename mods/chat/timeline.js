@@ -4,7 +4,7 @@ export function withPending(entries, pending) {
   const result = [];
   const slots = new Map();
   pending.forEach((message, index) => {
-    const anchor = message.afterKey == null ? -1 : entries.findIndex(entry => entry.key === message.afterKey);
+    const anchor = message.afterKey == null ? -1 : entries.findIndex(entry => entry.key === message.afterKey || entry.aliasKeys?.includes(message.afterKey));
     const slot = anchor + 1;
     if (!slots.has(slot)) slots.set(slot, []);
     slots.get(slot).push({ kind: "pending", message, index });

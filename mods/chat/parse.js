@@ -132,7 +132,7 @@ export class Transcript {
         if (settings && !failure && o.split("\n").length <= 2) {
           const effort = /^(Set effort level to \S+(?:\s+\([^)]*\))?)(?::|$)/.exec(o);
           this.push({ kind: "notice", event: "settings_changed", text: effort?.[1] ?? o, detail: o });
-        } else this.push({ kind: "output", text: o });
+        } else this.push({ kind: "output", text: o, error: failure });
       }
       return;
     }
