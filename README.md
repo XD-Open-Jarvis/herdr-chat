@@ -12,6 +12,7 @@ Based on [naruse/herdr-chat](https://github.com/naruse/herdr-chat), with the ori
 - A local follow-up queue. Pending messages survive layout reloads; delivery failures stay visible for manual retry. **Instant** sends a selected item immediately.
 - Codex fork history and conservative session binding. New Codex sessions launched from Chat include a terminal-title thread ID. Existing sessions use screen evidence or a visible `/status` panel when needed. See [identity details](docs/codex-title-identity.md).
 - Remote terminals resolve through their owning pane and tab, so connection aliases can differ between clients.
+- Change cards open every recorded file diff in one sidebar, with file headers that pin and push out as you scroll. With the sidebar closed, hovering a changed file shows an anchored, scrollable diff preview.
 - Read-only file sidebar: click a Markdown file link or a changed filename to open Markdown Preview / Source or Diff / File, with per-tab state and remote file reads.
 - Bounded file watching and suspended Chat work while TUI or another tab is visible.
 

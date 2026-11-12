@@ -3,7 +3,7 @@
 // Opened as a dialog (mod.open:chat, Cmd+N) it is the New chat form: it starts
 // the agent in a new space and opens its client-local conversation view.
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, HoverCard, InputState, Input } from "gpui-base";
 import {
   exec, hc, run, props, terminals, panes, spaces, theme, settings, appHome, home,
   watchFolder, nextCommand, pickFolder, shared, setShared, closeOverlay, machines, openOverlay, notify,
@@ -29,6 +29,7 @@ import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } f
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
+import { sidebarVisible, hoverGeometry } from "./hover-diff.js";
 import { fileLink, previewKey, previewLayout } from "./preview.js";
 import { diffLines, diffGroups } from "./diff.js";
 import { compactSettings, toolSummary, summaryLine, commandPreview } from "./display.js";
@@ -1997,13 +1998,14 @@ export default class Chat extends View {
       .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)));
   }
 
-  openFilePreview(url, cx, change = null) {
+  openFilePreview(url, cx, change = null, changes = null) {
     const pane = this.myPane(), term = this.terminal();
     const key = previewKey(pane);
     const target = fileLink(url, term?.foreground?.cwd ?? term?.cwd ?? pane?.cwd, Boolean(change));
     if (!target || !key) { if (!change) cx.open_url(url); return; }
     const pages = shared("chat.preview") ?? {};
     setShared("chat.preview", {...pages, [key]: {...target, on: machineOf(pane.terminal), change,
+      changes: changes?.map(file => ({...file, file: fileLink(file.path, term?.foreground?.cwd ?? term?.cwd ?? pane?.cwd, true)?.file ?? file.path})) ?? null,
       mode: change ? "diff" : /\.(md|markdown|mdown)$/i.test(target.file) ? "preview" : "source", revision: Date.now()}});
     cx.spawn(async () => {
       try {
@@ -2255,55 +2257,68 @@ export default class Chat extends View {
         .child(expanded ? "Show less" : `Show more (${lines.length - 80} lines)`)));
   }
 
+  openChanges(entry, cx, index = 0) {
+    const file = entry.files[index];
+    this.openFilePreview(file.path, cx, file, entry.files);
+  }
+
+  changeHover(id, trigger, file, entryKey, t) {
+    if (sidebarVisible(layout())) return trigger;
+    this.diffHoverGeometry ??= {};
+    const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
+    const width = this.changeWidths?.[entryKey] ?? Math.max(200, this.width - 2 * side);
+    const geometry = this.diffHoverGeometry[id] ?? {anchor:"top_left", width:width-24, height:320};
+    trigger.on_mouse_move((event, cx) => {
+      const viewport = this.chatBounds ?? {y:0,height:this.viewH || 600};
+      const next = hoverGeometry(event.bounds, viewport, width);
+      if (JSON.stringify(next) !== JSON.stringify(this.diffHoverGeometry[id])) { this.diffHoverGeometry[id] = next; cx.notify(); }
+    });
+    const colors = {added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
+    const escape = text => text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const content = v_flex().w(geometry.width).max_h(geometry.height).rounded(10).border_1().border_color(t.input).bg(t.popover).shadow_lg().overflow_hidden()
+      .on_scroll_wheel((_event,cx) => cx.stop_propagation())
+      .child(div().h(36).flex_none().px(12).flex().items_center().text_size(12).font_semibold().child(file.path.split(/[\\/]/).at(-1)))
+      .child(v_flex().id(`hover-scroll-${id}`).h(Math.min(Math.max(64,geometry.height-38),Math.max(80,diffLines(file).length*18+16))).flex_none().overflow_y_scrollbar().py(8)
+        .children(diffGroups(diffLines(file)).map((group,index) => div().px(10).w_full().min_w(0).flex_none()
+          .child(TextView.html(`hover-diff-${id}-${index}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
+            .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
+    return HoverCard.new(`diff-hover-${id}`).open_delay(250).close_delay(250).anchor(geometry.anchor).trigger(trigger).content(content);
+  }
+
   changeBlock(entry, t) {
-    const overview = changeOverview(entry.files);
-    const listKey = `file-list-${entry.key}`, diffKey = `file-diffs-${entry.key}`;
-    const allDiffs = this.open.has(diffKey), expanded = allDiffs || this.open.has(listKey);
-    const files = expanded ? entry.files : entry.files.slice(0, 3);
-    const stats = (added, removed) => h_flex().gap(6).flex_none().text_size(12.5)
-      .when(added != null, el => el.child(div().text_color(t.done).child(`+${added}`)))
-      .when(removed != null, el => el.child(div().text_color(t.ansi1).child(`−${removed}`)));
-    const details = (file, id) => v_flex().px(12).pb(10).gap(4)
-      .when(Boolean(file.oldPath), row => row.child(div().text_size(11).text_color(t.dim).child(`Moved from ${file.oldPath}`)))
-      .child(this.diffView(`diff-content-${id}`, file, t));
+    const overview = changeOverview(entry.files), listKey = `file-list-${entry.key}`;
+    const expanded = this.open.has(listKey), files = expanded ? entry.files : entry.files.slice(0,3);
+    const stats = (added,removed) => h_flex().gap(6).flex_none().text_size(12.5)
+      .when(added!=null,el=>el.child(div().text_color(t.done).child(`+${added}`)))
+      .when(removed!=null,el=>el.child(div().text_color(t.ansi1).child(`−${removed}`)));
+    let heading = h_flex().id(`change-heading-${entry.key}`).w_full().px(12).py(12).gap(10).items_center()
+      .child(div().size(36).flex_none().rounded(10).when(settings().dark,el=>el.bg(t.chrome)).flex().items_center().justify_center()
+        .child(svg("mods/chat/icons/edit.svg").size(20).text_color(t.muted)))
+      .child(v_flex().flex_1().min_w(0).gap(3)
+        .child(div().id(`preview-change-${entry.key}`).truncate().text_size(14).font_semibold().cursor_pointer()
+          .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx))
+          .child(entry.files.length===1?`${entry.files[0].operation==='delete'?'Deleted':entry.files[0].operation==='add'?'Added':'Edited'} ${overview.labels[0]}`:`Edited ${entry.files.length} files`))
+        .child(stats(overview.added,overview.removed)))
+      .child(this.button(`diff-toggle-${entry.key}`,"View changes",(_event,cx)=>this.openChanges(entry,cx),t)
+        .bg(t.background).border_1().border_color(t.input).rounded(10).py(6));
+    if(entry.files.length===1)heading=this.changeHover(`heading-${entry.key}`,heading,entry.files[0],entry.key,t);
     return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(t.input).overflow_hidden()
-      .when(settings().dark, el => el.bg(t.raised))
-      .child(h_flex().w_full().px(12).py(12).gap(10).items_center()
-        .child(div().size(36).flex_none().rounded(10).when(settings().dark, el => el.bg(t.chrome)).flex().items_center().justify_center()
-          .child(svg("mods/chat/icons/edit.svg").size(20).text_color(t.muted)))
-        .child(v_flex().flex_1().min_w(0).gap(3)
-          .child(div().id(`preview-change-${entry.key}`).truncate().text_size(14).font_semibold().cursor_pointer()
-            .hover(style => style.text_color(t.accent))
-            .on_click((_event, cx) => { if (entry.files.length === 1) this.openFilePreview(entry.files[0].path, cx, entry.files[0]); else this.toggleCard(diffKey, cx, allDiffs); }).child(entry.files.length === 1
-            ? `${entry.files[0].operation === "delete" ? "Deleted" : entry.files[0].operation === "add" ? "Added" : "Edited"} ${overview.labels[0]}`
-            : `Edited ${entry.files.length} files`))
-          .child(stats(overview.added, overview.removed).tooltip("Recorded additions and deletions in this turn")))
-        .child(this.button(`diff-toggle-${entry.key}`, allDiffs ? "Hide changes" : "View changes", (_e, cx) => {
-          this.toggleCard(diffKey, cx, allDiffs);
-        }, t).bg(t.background).border_1().border_color(t.input).rounded(10).py(6)))
-      .when(entry.files.length > 1, el => el.child(v_flex().border_t(1).border_color(t.border)
-        .children(files.map((file, index) => {
-          const id = `${entry.key}-${index}`, open = allDiffs || this.open.has(id);
-          const label = overview.labels[index], slash = label.lastIndexOf('/');
-          return v_flex().w_full().min_w(0)
-            .child(h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center().cursor_pointer()
-              .when(index === files.length - 1 && (entry.files.length <= 3 || expanded) && !open, row => row.rounded_b(11))
-              .hover(style => style.bg(t.hover))
-              .on_click((_e, cx) => { this.toggleCard(id, cx); })
-              .child(h_flex().id(`preview-file-${id}`).flex_1().min_w(0).text_size(13).cursor_pointer()
-                .hover(style => style.text_color(t.accent)).on_click((_event, cx) => { cx.stop_propagation(); this.openFilePreview(file.path, cx, file); })
-                .when(slash >= 0, row => row.child(div().flex_none().text_color(t.muted).child(label.slice(0, slash + 1))))
-                .child(div().min_w(0).truncate().child(label.slice(slash + 1))))
-              .child(stats(file.added, file.removed)))
-            .when(open, row => row.child(details(file, id)));
+      .when(settings().dark,el=>el.bg(t.raised))
+      .on_size_change((size,cx)=>{this.changeWidths??={};if(this.changeWidths[entry.key]!==size.width){this.changeWidths[entry.key]=size.width;cx.notify();}})
+      .child(heading)
+      .when(entry.files.length>1,el=>el.child(v_flex().border_t(1).border_color(t.border)
+        .children(files.map((file,index)=>{
+          const id=`${entry.key}-${index}`;
+          const row=h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center().cursor_pointer()
+            .when(index===files.length-1&&(entry.files.length<=3||expanded),el=>el.rounded_b(11))
+            .hover(style=>style.bg(t.hover)).on_click((_event,cx)=>this.openChanges(entry,cx,index))
+            .child(div().flex_1().min_w(0).truncate().text_size(13).child(overview.labels[index]))
+            .child(stats(file.added,file.removed));
+          return this.changeHover(id,row,file,entry.key,t);
         }))))
-      .when(entry.files.length === 1 && allDiffs, el => el.child(details(entry.files[0], entry.key)))
-      .when(entry.files.length > 3 && !allDiffs, el => el.child(h_flex().id(`more-${entry.key}`)
-        .px(12).py(9).gap(8).items_center().border_t(1).border_color(t.border).rounded_b(11).cursor_pointer()
-        .hover(style => style.bg(t.hover)).text_size(12.5)
-        .on_click((_e, cx) => { this.toggleCard(listKey, cx, expanded); })
-        .child(expanded ? "Show fewer files" : `Show ${entry.files.length - 3} more ${entry.files.length - 3 === 1 ? "file" : "files"}`)
-        .child(div().child(expanded ? "▴" : "▾"))));
+      .when(entry.files.length>3,el=>el.child(h_flex().id(`more-${entry.key}`).px(12).py(9).gap(8).items_center().border_t(1).border_color(t.border).rounded_b(11).cursor_pointer()
+        .hover(style=>style.bg(t.hover)).text_size(12.5).on_click((_event,cx)=>this.toggleCard(listKey,cx))
+        .child(expanded?"Show fewer files":`Show ${entry.files.length-3} more files`).child(div().child(expanded?"▴":"▾"))));
   }
 
   shellDetails(id, item, t, running) {
@@ -2534,6 +2549,7 @@ export default class Chat extends View {
         if (this.viewH === size.height && this.width === size.width) return;
         this.viewH = size.height; this.width = size.width; this.clamp(); cx.notify();
       })
+      .on_mouse_move(event => { this.chatBounds = event.bounds; })
       .on_scroll_wheel((e, cx) => { this.off += e.delta.y; this.clamp(); cx.notify(); })
       .child(content);
 

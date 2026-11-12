@@ -80,3 +80,14 @@ test('closing and reopening a preview never resets a user chosen sidebar width',
  s.view.openFilePreview('/repo/a.md',s.cx);await Promise.all(s.tasks);
  assert.deepEqual(s.calls.map(call=>call.name),['layout.select','layout.show']);
 });
+test('View changes opens the entire recorded change set and resolves every file on its owner machine',async()=>{
+ const pane={tab:'alias/tab',pane:'alias/pane',terminal:'alias/t1',cwd:'/remote/repo'};
+ const tree={id:'panel',children:[{id:'chat-preview'}]};
+ const s=previewView(null,pane,tree);
+ s.view.openChanges({files:[{path:'a.js',diff:'-a\n+b'},{path:'docs/b.md',diff:'+b'}]},s.cx,1);
+ await Promise.all(s.tasks);
+ const request=s.saved()[previewKey(pane)];
+ assert.equal(request.changes.length,2);assert.equal(request.file,'/remote/repo/docs/b.md');
+ assert.equal(request.changes[0].file,'/remote/repo/a.js');assert.equal(request.changes[1].file,'/remote/repo/docs/b.md');
+ assert.equal(request.mode,'diff');assert.equal(request.on,'alias');
+});
