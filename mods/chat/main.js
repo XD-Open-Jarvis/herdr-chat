@@ -30,7 +30,7 @@ import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
 import { compactSettings, toolSummary } from "./display.js";
-import { toolDetails, withChanges } from "./activity.js";
+import { toolDetails, withChanges, changeOverview } from "./activity.js";
 import { ChatAttention } from "./attention.js";
 import { IdentifyFeedback, identifyKey } from "./identify.js";
 import { Outbox, outboxScope } from "./outbox.js";
@@ -1312,7 +1312,7 @@ export default class Chat extends View {
         this.trustFolder();
         cx.notify();
       });
-    } else if (this.t && ["idle", "done"].includes(term?.status) && !this.panelLive()) {
+    } else if (this.t && ["idle", "done", "error"].includes(term?.status) && !this.panelLive()) {
       // A menu the agent opens on its own once a turn ends (an offer, a setup
       // form) doesn't report "blocked": only the screen shows it.
       cx.spawn(async (cx) => {
@@ -1411,7 +1411,7 @@ export default class Chat extends View {
     const kind = agentKind(term);
     const verified = ["codex", "claude"].includes(kind) && (kind !== "codex" || (this.sessionResolved
       && (!title || !this.file || titleMatchesFile(title, this.file))));
-    return { scope: verified ? outboxScope(term, session) : null, status: term?.status, turn: term?.turn };
+    return { scope: verified ? outboxScope(term, session) : null, status: this.idleAsk ? "blocked" : term?.status, turn: term?.turn };
   }
 
   saveOutbox() {
@@ -1428,6 +1428,7 @@ export default class Chat extends View {
   pumpOutbox(cx, id = null) {
     if (this.dialog || !this.outbox) return;
     const context = this.queueContext();
+    if (!id && this.t?.issue?.usage) return;
     const item = this.outbox.claim(context, id);
     this.saveOutbox();
     if (!item) return;
@@ -1439,16 +1440,16 @@ export default class Chat extends View {
     this.t?.markInput();
     cx.notify();
     cx.spawn(async cx => {
-      let error = null;
+      let error = null, paused = false;
       try {
         const ok = await this.deliver(item.text, item.paths, cx, {
           target, valid: () => this.term === target && this.queueContext().scope === item.scope,
           idleOnly: !id && context.status === "idle", steer: Boolean(id),
         });
         if (!ok) error = this.error || "Message was not sent.";
-      } catch (e) { error = String(e?.message ?? e); }
+      } catch (e) { error = String(e?.message ?? e); paused = Boolean(e?.queuePaused); }
       pending.delivering = false;
-      this.outbox.finish(item.id, error);
+      this.outbox.finish(item.id, error, paused);
       if (error) this.pending = this.pending.filter(message => message !== pending);
       this.saveOutbox();
       cx.notify();
@@ -1482,7 +1483,7 @@ export default class Chat extends View {
           })
           .children(items.map((item) => {
             const paused = context.scope !== item.scope;
-            const unavailable = paused || !["idle", "done", "working"].includes(context.status);
+            const unavailable = paused || !["idle", "done", "working", "error"].includes(context.status);
             const hovered = this.outboxHovered === item.id;
             return h_flex().id(`outbox-${item.id}`).w_full().min_h(44).flex_none().relative().px(12).py(10).gap(10).items_center()
               .on_hover((on, cx) => {
@@ -1727,6 +1728,18 @@ export default class Chat extends View {
     if (options.valid && !options.valid()) throw new Error("The conversation changed; message remains queued.");
     // terminal.send may protect an unfinished TUI draft for 60 seconds.
     // herdr.hc() has a fixed 30-second ceiling; use the configurable exec path.
+    if (options.valid) {
+      const screen = await hc(["read", target, "--lines", "40"]);
+      if (screen.code !== 0) throw new Error(screen.stderr?.trim() || "Could not check terminal input");
+      const menu = menuAtBottom(screen.stdout);
+      if (menu) {
+        this.idleAsk = menu; this.screen = screen.stdout;
+        const error = new Error("Waiting for your selection in the terminal prompt.");
+        error.queuePaused = true;
+        throw error;
+      }
+      if (!options.valid()) throw new Error("The conversation changed; message remains queued.");
+    }
     const r = await exec("hc", ["send", ...(options.idleOnly ? ["--if", "idle"] : []), target, message], { timeout: 180000 });
     this.error = r.code === 0 ? null : r.stderr.trim() || "send failed";
     if (r.code === 0 && options.steer && agentKind(this.terminal()) === "claude"
@@ -1922,6 +1935,10 @@ export default class Chat extends View {
   }
 
   entry(e, t, last, nextKind = null) {
+    if (e.kind === "error") return v_flex().w_full().gap(6).px(12).py(10).rounded(10)
+      .border_1().border_color(t.blocked).bg(t.surface)
+      .child(div().text_size(12.5).font_semibold().text_color(t.blocked).child(e.usage ? "Usage limit reached" : "Agent error"))
+      .child(div().text_size(13).child(this.markdown(`error-${e.key}`, e.text)));
     if (e.kind === "changes") return this.changeBlock(e, t);
     if (e.kind === "user") {
       // Let actual text layout size the bubble, capped by the panel width.
@@ -2121,22 +2138,49 @@ export default class Chat extends View {
   }
 
   changeBlock(entry, t) {
-    return v_flex().w_full().gap(6).children(entry.files.map((file, index) => {
-      const id = `${entry.key}-${index}`, open = this.open.has(id);
-      return v_flex().w_full().min_w(0).rounded(10).border_1().border_color(t.border).bg(t.surface)
-        .child(h_flex().px(12).py(10).gap(8).items_center()
-          .child(svg("mods/chat/icons/edit.svg").size(16).flex_none().text_color(t.muted))
-          .child(div().flex_1().min_w(0).truncate().text_size(13).tooltip(file.path)
-            .child(`${file.operation === "delete" ? "Deleted" : file.operation === "add" ? "Added" : "Edited"} ${file.path.split(/[\\/]/).at(-1)}`))
-          .when(file.added != null, el => el.child(div().text_size(12).text_color(t.done).child(`+${file.added}`)))
-          .when(file.removed != null, el => el.child(div().text_size(12).text_color(t.ansi1).child(`−${file.removed}`)))
-          .child(this.button(`diff-${id}`, open ? "Hide changes" : "View changes", (_e, cx) => {
-            open ? this.open.delete(id) : this.open.add(id); cx.notify();
-          }, t)))
-        .when(open, el => el.child(v_flex().px(12).pb(10).gap(4)
-          .when(Boolean(file.oldPath), row => row.child(div().text_size(11).text_color(t.dim).child(`Moved from ${file.oldPath}`)))
-          .child(this.plainOutput(`diff-content-${id}`, file.diff || `${file.operation} ${file.path}`, t, false, false))));
-    }));
+    const overview = changeOverview(entry.files);
+    const listKey = `file-list-${entry.key}`, diffKey = `file-diffs-${entry.key}`;
+    const allDiffs = this.open.has(diffKey), expanded = allDiffs || this.open.has(listKey);
+    const files = expanded ? entry.files : entry.files.slice(0, 3);
+    const stats = (added, removed) => h_flex().gap(6).flex_none().text_size(12.5)
+      .when(added != null, el => el.child(div().text_color(t.done).child(`+${added}`)))
+      .when(removed != null, el => el.child(div().text_color(t.ansi1).child(`−${removed}`)));
+    const details = (file, id) => v_flex().px(12).pb(10).gap(4)
+      .when(Boolean(file.oldPath), row => row.child(div().text_size(11).text_color(t.dim).child(`Moved from ${file.oldPath}`)))
+      .child(this.plainOutput(`diff-content-${id}`, file.diff || `${file.operation} ${file.path}`, t, false, false));
+    return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(t.input).bg(t.background).overflow_hidden()
+      .child(h_flex().w_full().px(12).py(12).gap(10).items_center().bg(t.surface)
+        .child(div().size(36).flex_none().rounded(10).bg(t.chrome).flex().items_center().justify_center()
+          .child(svg("mods/chat/icons/edit.svg").size(20).text_color(t.muted)))
+        .child(v_flex().flex_1().min_w(0).gap(3)
+          .child(div().truncate().text_size(14).font_semibold().child(entry.files.length === 1
+            ? `${entry.files[0].operation === "delete" ? "Deleted" : entry.files[0].operation === "add" ? "Added" : "Edited"} ${overview.labels[0]}`
+            : `Edited ${entry.files.length} files`))
+          .child(stats(overview.added, overview.removed).tooltip("Recorded additions and deletions in this turn")))
+        .child(this.button(`diff-toggle-${entry.key}`, allDiffs ? "Hide changes" : "View changes", (_e, cx) => {
+          allDiffs ? this.open.delete(diffKey) : this.open.add(diffKey); cx.notify();
+        }, t).bg(t.background).border_1().border_color(t.input).rounded(10).py(6)))
+      .when(entry.files.length > 1, el => el.child(v_flex().border_t(1).border_color(t.border)
+        .children(files.map((file, index) => {
+          const id = `${entry.key}-${index}`, open = allDiffs || this.open.has(id);
+          const label = overview.labels[index], slash = label.lastIndexOf('/');
+          return v_flex().w_full().min_w(0)
+            .child(h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center().cursor_pointer()
+              .hover(style => style.bg(t.hover))
+              .on_click((_e, cx) => { this.open.has(id) ? this.open.delete(id) : this.open.add(id); cx.notify(); })
+              .child(h_flex().flex_1().min_w(0).text_size(13).tooltip(file.path)
+                .when(slash >= 0, row => row.child(div().flex_none().text_color(t.muted).child(label.slice(0, slash + 1))))
+                .child(div().min_w(0).truncate().child(label.slice(slash + 1))))
+              .child(stats(file.added, file.removed)))
+            .when(open, row => row.child(details(file, id)));
+        }))))
+      .when(entry.files.length === 1 && allDiffs, el => el.child(details(entry.files[0], entry.key)))
+      .when(entry.files.length > 3 && !allDiffs, el => el.child(h_flex().id(`more-${entry.key}`)
+        .px(12).py(9).gap(8).items_center().border_t(1).border_color(t.border).bg(t.surface).cursor_pointer()
+        .hover(style => style.bg(t.hover)).text_size(12.5)
+        .on_click((_e, cx) => { expanded ? this.open.delete(listKey) : this.open.add(listKey); cx.notify(); })
+        .child(expanded ? "Show fewer files" : `Show ${entry.files.length - 3} more ${entry.files.length - 3 === 1 ? "file" : "files"}`)
+        .child(div().child(expanded ? "▴" : "▾"))));
   }
 
   tool(key, n, i, t) {
@@ -2453,6 +2497,11 @@ export default class Chat extends View {
           .on_click((_e, cx) => (stop ? hc(["interrupt", this.term]) : this.send(cx)))
           .child(stop ? div().size(12).flex_none().rounded(2).bg(t.accent_foreground) : "↑")));
     return v_flex().flex_none().bg(t.background).px(16).pb(14).gap(8)
+      .when(Boolean(this.t?.issue?.usage), el => el.child(h_flex().w_full().justify_center().child(
+        h_flex().w_full().max_w(900).px(10).py(8).gap(8).items_center().rounded(8).border_1().border_color(t.blocked)
+          .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked)
+            .tooltip(this.t.issue.message).child("Usage limit reached · queued messages are paused"))
+          .child(this.button("usage-terminal", "Show TUI", (_e, cx) => this.showTerminal(cx), t)))))
       .when(working, (el) => el.child(h_flex().w_full().justify_center().child(h_flex().w_full().max_w(900).px(6).gap(8).items_center().text_size(12).text_color(t.muted)
         .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
         .child(div().flex_1().min_w(0).truncate().child(term.report?.msg || "Working…")))))

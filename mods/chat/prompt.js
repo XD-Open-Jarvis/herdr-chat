@@ -3,7 +3,7 @@
 
 const MARKER = /^(\s*)([❯›>])\s+/;
 const NUMBER = /^\s*\d+[.)]\s+/;
-const HINT = /(Enter to (confirm|select)|Esc to (cancel|exit)|↑\/↓|to navigate)/i;
+const HINT = /(enter\s+(?:to\s+)?(?:confirm|select|continue|submit)|esc\s+(?:to\s+)?(?:cancel|exit|back)|↑\/↓|to navigate)/i;
 const RULE = /^\s*[─━—\-▔▁═]{8,}\s*$/;
 
 // A menu waiting at the bottom of the screen: its hint line ("Enter to confirm ·
@@ -56,6 +56,8 @@ export function parsePrompt(screen) {
   // The question: what's above the options, back to the last rule line.
   let top = first;
   while (top > 0 && !RULE.test(lines[top - 1])) top--;
+  const banner = lines.slice(top, first).findIndex(line => /^\s*Approaching rate limits\b/i.test(line));
+  if (banner >= 0) top += banner;
   const question = reflow(lines.slice(top, first));
   return { question, options, selected };
 }

@@ -64,3 +64,10 @@ test('nested tool and patch verification failures never produce an applied-chang
   assert.equal(toolDetails(edit).error,true);assert.equal(withChanges([{kind:'tools',key:'t',items:[edit]}]).length,1);
  }
 });
+test('change overview totals recorded lines and preserves relative directories in a multi-file card',async()=>{
+ const {changeOverview}=await load('activity');
+ const files=[{path:'/repo/RECIPE.md',added:2,removed:2},{path:'/repo/docs/release.md',added:21,removed:0},
+  {path:'/repo/scripts/install.py',added:2,removed:2},{path:'/repo/README.md',added:1,removed:1}];
+ assert.deepEqual(changeOverview(files),{added:26,removed:5,labels:['RECIPE.md','docs/release.md','scripts/install.py','README.md']});
+ assert.equal(changeOverview([{path:'/gone',added:null,removed:null}]).removed,null);
+});

@@ -74,3 +74,7 @@ test('failed or uncertain direct deliveries become visible for recovery',()=>{
  assert.equal(restored.visibleItems[0].text,'retain me');assert.equal(restored.visibleItems[0].state,'error');
  q.finish(item.id,'offline');assert.equal(q.visibleItems[0],item);assert.equal(item.error,'offline');
 });
+test('an error phase does not auto-send but permits an explicit retry after the user chooses recovery',()=>{
+ const q=new Outbox();const item=add(q,'retry');const context={...idle,status:'error'};
+ assert.equal(q.claim(context),null);assert.equal(q.claim(context,item.id),item);
+});

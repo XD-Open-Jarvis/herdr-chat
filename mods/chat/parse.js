@@ -87,6 +87,8 @@ export class Transcript {
     this.tools = new Map();
     this.next = 0;
     this.revision = 0;
+    this.issue = null;
+    this.turnId = null;
     this.title = null;
     // Messages waiting in Claude Code's own queue (sent while it worked), as its
     // queue operations record them: taken in order, absorbed mid-turn, or popped
@@ -317,9 +319,29 @@ export class Transcript {
     }
   }
 
+  agentError(error, timestamp, turn = this.turnId) {
+    const message = typeof error === "string" ? error : error?.message ?? toText(error);
+    if (!message?.trim()) return;
+    const code = typeof error?.codex_error_info === "string" ? error.codex_error_info
+      : typeof error?.code === "string" ? error.code : null;
+    const usage = /usage_limit|rate_limit_exceeded/i.test(code ?? "") || /hit your usage limit|usage limit (?:reached|exceeded)/i.test(message);
+    if (this.issue?.turn === turn && this.issue.message === message) return;
+    this.issue = {message, code, usage, turn};
+    this.push({kind:"error", event:"agent_error", text:message, code, usage, timestamp});
+  }
+
   codex(d) {
     const p = d.payload ?? {};
     if (d.type === "compacted") return this.note("Conversation compacted");
+    if (d.type === "event_msg" && p.type === "task_started") {
+      this.turnId = p.turn_id ?? p.root_turn_id ?? null;
+      this.issue = null;
+      return;
+    }
+    if (d.type === "event_msg" && p.type === "error") {
+      this.agentError(p.error ?? p, d.timestamp, p.turn_id ?? this.turnId);
+      return;
+    }
     if (d.type === "turn_context") {
       this.modelSettings(p.model, p.effort ?? p.collaboration_mode?.settings?.reasoning_effort);
       // Which of /permissions' presets this turn ran with.
@@ -333,6 +355,7 @@ export class Transcript {
       return;
     }
     if (d.type === "event_msg" && p.type === "task_complete") {
+      if (p.error) this.agentError(p.error, d.timestamp, p.turn_id ?? p.root_turn_id ?? this.turnId);
       const duration = p.duration_ms ?? (Number.isFinite(p.started_at) && Number.isFinite(p.completed_at)
         ? (p.completed_at - p.started_at) * 1000 : null);
       return this.completed(duration, d.timestamp, p.turn_id ?? p.root_turn_id ?? d.timestamp);

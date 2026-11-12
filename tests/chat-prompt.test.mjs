@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {test} from 'node:test';
+const source=readFileSync(new URL('../mods/chat/prompt.js',import.meta.url),'utf8');
+const {menuAtBottom,parsePrompt,choose}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const screen=`Previous assistant response
+Worked for 10m
+
+Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+› 1. Switch to gpt-6-luna          Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)   Hide future reminders.
+
+  enter select · esc back`;
+test('Codex rate limit prompt is recognized with the shorter enter select / esc back legend',()=>{
+ assert.equal(menuAtBottom(screen),'menu');
+ const prompt=parsePrompt(screen);assert.equal(prompt.selected,0);assert.equal(prompt.options.length,3);
+ assert.ok(prompt.question.startsWith('Approaching rate limits'));assert.ok(!prompt.question.includes('Previous assistant'));
+ assert.ok(prompt.options[1].includes('Keep current model'));assert.deepEqual(choose(prompt.selected,1),['down','enter']);
+});
+test('both old and new menu legends remain supported without treating normal TUI hints as prompts',()=>{
+ assert.equal(menuAtBottom(screen.replace('enter select · esc back','Enter to select · Esc to cancel')),'menu');
+ assert.equal(menuAtBottom('› Ask anything\nWorking · esc to interrupt\n← for agents · ? for shortcuts'),null);
+ assert.equal(menuAtBottom('↑/↓ to navigate · Enter to confirm'),'menu');
+});

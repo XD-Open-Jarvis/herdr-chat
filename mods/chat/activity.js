@@ -132,3 +132,10 @@ export function withChanges(entries) {
   }
   flush();return result;
 }
+export function changeOverview(files) {
+  const parts=files.map(file=>file.path.split(/[\\/]/));
+  const prefix=parts[0]?.slice(0,-1)??[];
+  while(prefix.length&&!parts.every(path=>prefix.every((part,index)=>path[index]===part)))prefix.pop();
+  const total=field=>files.every(file=>Number.isFinite(file[field]))?files.reduce((sum,file)=>sum+file[field],0):null;
+  return {added:total('added'),removed:total('removed'),labels:parts.map(path=>path.slice(prefix.length).join('/'))};
+}

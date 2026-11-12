@@ -119,3 +119,20 @@ test('setting errors and ordinary command output are not demoted to settings not
  }
  const t=new Transcript('claude');t.user('<command-name>/effort low</command-name>');t.user('<local-command-stderr>Something went wrong</local-command-stderr>');assert.equal(t.entries[1].kind,'output');
 });
+test('Codex usage-limit failures inside task_complete are displayed instead of being lost behind duration',()=>{
+ const t=new Transcript('codex');
+ t.feed(JSON.stringify({type:'event_msg',timestamp:'2026-11-12T09:39:26Z',payload:{type:'task_complete',turn_id:'limited',duration_ms:3695,
+  error:{message:'You’ve hit your usage limit. Try again at 5:58 PM.',codex_error_info:'usage_limit_exceeded'}}}));
+ assert.equal(t.entries[0].kind,'error');assert.equal(t.entries[0].usage,true);
+ assert.ok(t.entries[0].text.includes('5:58 PM'));assert.equal(t.issue.usage,true);
+ assert.equal(t.entries[1].event,'completed');
+});
+test('error events stay visible, duplicate reports are coalesced and a new task clears only the active limit',()=>{
+ const t=new Transcript('codex'),error={message:'You have hit your usage limit.',codex_error_info:'usage_limit_exceeded'};
+ t.feed(JSON.stringify({type:'event_msg',payload:{type:'task_started',turn_id:'one'}}));
+ t.feed(JSON.stringify({type:'event_msg',payload:{type:'error',...error,turn_id:'one'}}));
+ t.feed(JSON.stringify({type:'event_msg',payload:{type:'task_complete',turn_id:'one',error}}));
+ assert.equal(t.entries.filter(e=>e.kind==='error').length,1);
+ t.feed(JSON.stringify({type:'event_msg',payload:{type:'task_started',turn_id:'two'}}));
+ assert.equal(t.issue,null);assert.equal(t.entries.filter(e=>e.kind==='error').length,1);
+});

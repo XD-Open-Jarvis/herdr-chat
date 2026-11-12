@@ -34,7 +34,7 @@ export class Outbox {
   claim(context, id = null) {
     this.observe(context);
     if (!context.scope || this.items.some(item => item.state === "sending")) return null;
-    if (!["idle", "done", "working"].includes(context.status)) return null;
+    if (!["idle", "done", "working", ...(id ? ["error"] : [])].includes(context.status)) return null;
     const item = id ? this.items.find(item => item.id === id)
       : this.items.find(item => item.scope === context.scope);
     if (!item || item.scope !== context.scope || item.state === "sending") return null;
@@ -45,11 +45,11 @@ export class Outbox {
     item.error = null;
     return item;
   }
-  finish(id, error = null) {
+  finish(id, error = null, paused = false) {
     const item = this.items.find(item => item.id === id);
     if (!item) return;
     if (error) {
-      item.state = "error"; item.error = error;
+      item.state = paused ? "queued" : "error"; item.error = paused ? null : error;
       this.gate = this.previousGate ?? null;
     } else this.items = this.items.filter(item => item.id !== id);
     this.previousGate = null;

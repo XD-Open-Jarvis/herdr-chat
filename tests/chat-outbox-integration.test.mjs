@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 const load=async file=>import('data:text/javascript;base64,'+Buffer.from(readFileSync(new URL(file,import.meta.url),'utf8')).toString('base64'));
 const {Outbox}=await load('../mods/chat/outbox.js');
+const {menuAtBottom}=await load('../mods/chat/prompt.js');
 const source=readFileSync(new URL('../mods/chat/main.js',import.meta.url),'utf8');
 // Exercise the real controller methods with a fake terminal transport, never a user session.
 const method=(name,next,bindings={})=>{
@@ -59,7 +60,7 @@ test('Enter while busy enqueues text and attachment snapshots without delivering
  attachment.name='changed';assert.equal(queued.attachments[0].name,'a.png');
 });
 const deliverySource=source.slice(source.indexOf('  async deliver('),source.indexOf('\n  // Starts one terminal'));
-const delivery=(hc,machineOf=()=>null)=>Function('hc','exec','agentKind','machineOf','shellEscape',`return ({${deliverySource.trim()}}).deliver`)(hc,async(command,args,options)=>{assert.equal(command,'hc');assert.equal(options.timeout,180000);return hc(args);},()=> 'codex',machineOf,value=>value);
+const delivery=(hc,machineOf=()=>null,screen='')=>Function('hc','exec','agentKind','machineOf','shellEscape','menuAtBottom',`return ({${deliverySource.trim()}}).deliver`)(async args=>args[0]==='read'?{code:0,stdout:screen}:hc(args),async(command,args,options)=>{assert.equal(command,'hc');assert.equal(options.timeout,180000);return hc(args);},()=> 'codex',machineOf,value=>value,menuAtBottom);
 test('automatic delivery uses an atomic idle guard; Send now uses the normal steering submission',async()=>{
  const calls=[],fn=delivery(async args=>{calls.push(args);return {code:0};});
  const chat={term:'mini/t1',terminal:()=>({status:'working'})};const cx={notify(){}};
@@ -84,4 +85,25 @@ test('Enter while idle dispatches immediately and shows only an optimistic messa
  assert.equal(tasks.length,1);assert.equal(chat.pending[0].text,'send directly');
  assert.equal(chat.outbox.visibleItems.length,0);assert.equal(draft,'');
  await tasks.shift()();assert.equal(calls[0][0],'send directly');assert.equal(chat.outbox.items.length,0);
+});
+test('an idle terminal menu pauses delivery instead of pressing Enter into its default choice',async()=>{
+ const calls=[];const screen='Approaching rate limits\nSwitch to a cheaper model?\n\n› 1. Switch model\n  2. Keep model\n\nenter select · esc back';
+ const fn=delivery(async args=>{calls.push(args);return {code:0};},()=>null,screen);
+ const chat={term:'t1',terminal:()=>({status:'idle'})};
+ await assert.rejects(fn.call(chat,'queued task',[],{notify(){}},{valid:()=>true,idleOnly:true}),error=>error.queuePaused===true);
+ assert.deepEqual(calls,[]);assert.equal(chat.idleAsk,'menu');assert.equal(chat.screen,screen);
+});
+test('a prompt pause restores the selected message to queued without hiding it or marking it failed',async()=>{
+ const {chat,context,cx,tasks}=make();context.status='idle';
+ const item=chat.outbox.enqueue({text:'keep queued',paths:[],attachments:[]},context.scope);
+ chat.deliver=async()=>{throw Object.assign(Error('choose first'),{queuePaused:true});};
+ pump.call(chat,cx);await tasks.shift()();
+ assert.equal(item.state,'queued');assert.equal(item.error,null);assert.equal(chat.pending.length,0);
+ assert.deepEqual(chat.outbox.visibleItems,[item]);assert.equal(chat.outbox.gate,null);
+});
+test('a usage-limit error pauses automatic sends while retaining the queue and allows explicit retry',async()=>{
+ const {chat,context,cx,tasks}=make();context.status='idle';chat.t={issue:{usage:true},entries:[],markInput(){}};
+ const item=chat.outbox.enqueue({text:'wait',paths:[],attachments:[]},context.scope);
+ pump.call(chat,cx);assert.equal(tasks.length,0);assert.equal(item.state,'queued');
+ pump.call(chat,cx,item.id);assert.equal(tasks.length,1);await tasks.shift()();assert.equal(chat.outbox.items.length,0);
 });
