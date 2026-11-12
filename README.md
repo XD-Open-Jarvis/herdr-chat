@@ -198,3 +198,9 @@ binding only after verifying that process identity. Explicit new session
 identity replaces it; a displayed status for an unavailable session invalidates
 it. In-place session changes still require new identity evidence: process
 continuity alone cannot prove that no external `/fork` or `/resume` occurred.
+
+Chat also follows Herdr's shared `herdr.seen=<turn>` read-state contract. A
+foreground, visible Chat with a loaded conversation acknowledges completed
+turns once. Hidden/background views and unresolved sessions do not mark them
+read, and continuous polling does not override another client's mark-unread
+until the conversation is viewed again.

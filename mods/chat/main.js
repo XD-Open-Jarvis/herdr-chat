@@ -28,6 +28,7 @@ import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } f
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
+import { ChatAttention } from "./attention.js";
 import { herdr, chatTab, away, hide, show, switchView } from "./backstage.js";
 
 const ASK_FIRST = "Answer the question above first.";
@@ -1169,7 +1170,12 @@ export default class Chat extends View {
     // Agents list) or the agent needing you brings it back; put it away again after.
     const own = !this.presentation && away(term) && spaces().flatMap((s) => s.tabs).find((x) => x.id === this.label("tab"));
     if (own && !own.settled && !own.active && term.status !== "blocked") run("tab.settle", { id: own.id });
-    if (!this.chatVisible()) return;
+    const visible = this.chatVisible();
+    if (!visible) {
+      this.attention?.update(term, { visible: false }, () => {});
+      return;
+    }
+    this.attention ??= new ChatAttention();
     const identitySource = `${this.term}:${term?.foreground?.pid}`;
     if (this.sourceAddress !== identitySource) {
       this.sourceAddress = identitySource;
@@ -1185,6 +1191,12 @@ export default class Chat extends View {
       this.running = null;
     }
     const kind = agentKind(term);
+    const seen = this.attention.update(term, { visible, active: appWindow().active,
+      ready: Boolean(this.t?.entries.length) && (kind !== "codex" || this.sessionResolved) }, async (address, turn) => {
+      const result = await hc(["label", address, `herdr.seen=${turn}`]);
+      if (result.code !== 0) throw new Error(result.stderr || "Could not mark the conversation read");
+    });
+    if (seen) cx.spawn(async cx => { await seen; cx.notify(); });
     this.loadCmds(term, kind, cx);
     if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
     const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
