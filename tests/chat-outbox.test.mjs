@@ -52,3 +52,25 @@ test('persisted scope uses the machine-local terminal ID across connection alias
  const term={state:'live',address:'mini/t1',foreground:{pid:42}};
  assert.equal(outboxScope(term,'sid'),outboxScope({...term,address:'different-alias/t1'},'sid'));
 });
+test('idle sends start immediately without appearing as queued follow-ups',()=>{
+ for(const status of ['idle','done']){
+  const q=new Outbox();const context={...idle,status};
+  assert.equal(q.canSendDirect(context),true);
+  const item=q.enqueue({text:'now',paths:[],attachments:[],direct:true},context.scope);
+  assert.equal(q.claim(context),item);assert.equal(q.visibleItems.length,0);
+  assert.equal(q.canSendDirect(context),false);
+  q.finish(item.id);assert.equal(q.visibleItems.length,0);
+ }
+});
+test('busy sends and existing same-session queues retain FIFO instead of bypassing the queue',()=>{
+ const q=new Outbox();assert.equal(q.canSendDirect(busy),false);
+ const first=add(q,'first');assert.equal(q.canSendDirect(idle),false);
+ assert.deepEqual(q.visibleItems,[first]);
+});
+test('failed or uncertain direct deliveries become visible for recovery',()=>{
+ const q=new Outbox();const item=q.enqueue({text:'retain me',paths:[],attachments:[],direct:true},idle.scope);
+ q.claim(idle);assert.equal(q.visibleItems.length,0);
+ const restored=new Outbox(JSON.parse(JSON.stringify(q)));
+ assert.equal(restored.visibleItems[0].text,'retain me');assert.equal(restored.visibleItems[0].state,'error');
+ q.finish(item.id,'offline');assert.equal(q.visibleItems[0],item);assert.equal(item.error,'offline');
+});

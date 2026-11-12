@@ -73,3 +73,13 @@ test('a session change during attachment upload prevents sending into the new se
  await assert.rejects(fn.call(chat,'old',['/local/a.png'],{notify(){}},{valid:()=>valid}),/conversation changed/);
  assert.deepEqual(calls,[['put','mini/t1','/local/a.png']]);
 });
+test('Enter while idle dispatches immediately and shows only an optimistic message, not a queue',async()=>{
+ const {chat,context,cx,tasks,calls}=make();context.status='idle';let draft='send directly';
+ Object.assign(chat,{sessionResolved:true,terminal:()=>({status:'idle'}),
+  slash:()=>null,mentionMenu:()=>null,emojiMenu:()=>null,panelLive:()=>false,typedCommand:()=>null,
+  input:{value:()=>draft,set_value:value=>{draft=value;}},attach:[],pumpOutbox:()=>pump.call(chat,cx)});
+ send.call(chat,cx);
+ assert.equal(tasks.length,1);assert.equal(chat.pending[0].text,'send directly');
+ assert.equal(chat.outbox.visibleItems.length,0);assert.equal(draft,'');
+ await tasks.shift()();assert.equal(calls[0][0],'send directly');assert.equal(chat.outbox.items.length,0);
+});

@@ -1455,16 +1455,17 @@ export default class Chat extends View {
   }
 
   outboxView(t) {
-    if (!this.outbox.items.length) return null;
+    const items = this.outbox.visibleItems;
+    if (!items.length) return null;
     const context = this.queueContext();
-    const height = Math.min(240, this.outboxHeight ?? this.outbox.items.length * 80);
+    const height = Math.min(240, this.outboxHeight ?? items.length * 80);
     const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
     return h_flex().w_full().justify_center().child(v_flex().id("outbox").w_full().max_w(900)
       .rounded(18).overflow_hidden()
       .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
         .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.text_color(t.foreground))
         .on_click((_e, cx) => { this.outboxExpanded = !this.outboxExpanded; this.outboxHovered = null; cx.notify(); })
-        .child(`${this.outbox.items.length} queued`)
+        .child(`${items.length} queued`)
         .child(div().text_size(11).child(this.outboxExpanded ? "▴" : "▾")))
       .when(Boolean(this.outboxExpanded), el => el.border_1().border_color(t.input).child(div().id("outbox-scroll").w_full()
         .h(height).flex_none().relative().overflow_hidden().border_t(1).border_color(t.border)
@@ -1478,7 +1479,7 @@ export default class Chat extends View {
               this.outboxHeight = size.height; cx.notify();
             }
           })
-          .children(this.outbox.items.map((item) => {
+          .children(items.map((item) => {
             const paused = context.scope !== item.scope;
             const unavailable = paused || !["idle", "done", "working"].includes(context.status);
             const hovered = this.outboxHovered === item.id;
@@ -1680,7 +1681,8 @@ export default class Chat extends View {
     this.off = 0;
     // Regular messages wait for a free turn; commands retain their immediate behavior.
     if (!/^[\/!]/.test(text) && context.scope) {
-      this.outbox.enqueue({ text, paths: files, attachments }, context.scope);
+      const direct = this.outbox.canSendDirect(context);
+      this.outbox.enqueue({ text, paths: files, attachments, direct }, context.scope);
       this.saveOutbox();
       this.pumpOutbox(cx);
       return cx.notify();
@@ -2459,7 +2461,7 @@ export default class Chat extends View {
       .when(Boolean(this.slash()), (el) => el.child(h_flex().w_full().justify_center().child(this.commandMenu(t))))
       .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.emojiView(t))))
       .when(!this.slash() && Boolean(this.mentionMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.mentionView(t))))
-      .when(!this.dialog && this.outbox.items.length > 0, el => el.child(this.outboxView(t)))
+      .when(!this.dialog && this.outbox.visibleItems.length > 0, el => el.child(this.outboxView(t)))
       .child(h_flex().w_full().justify_center().child(card));
   }
 

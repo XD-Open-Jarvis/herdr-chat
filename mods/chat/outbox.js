@@ -9,6 +9,17 @@ export class Outbox {
       ? { ...item, state: "error", error: "Delivery was interrupted. Check TUI before retrying." } : item) : [];
     this.gate = saved.gate ?? null;
   }
+  // Idle submissions start synchronously; retain an internal delivery receipt
+  // for crash recovery without presenting them as queued follow-ups.
+  canSendDirect(context) {
+    this.observe(context);
+    return Boolean(context.scope) && ["idle", "done"].includes(context.status)
+      && this.gate?.scope !== context.scope
+      && !this.items.some(item => item.scope === context.scope || item.state === "sending");
+  }
+  get visibleItems() {
+    return this.items.filter(item => !(item.direct && item.state === "sending"));
+  }
   enqueue(message, scope) {
     const item = { ...message, scope, id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, state: "queued" };
     this.items.push(item);
