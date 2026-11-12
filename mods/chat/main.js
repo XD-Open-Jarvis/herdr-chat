@@ -2237,8 +2237,9 @@ export default class Chat extends View {
       return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).p(24).gap(12)
         .child(this.locating ? "Identifying the conversation…" : "The current conversation could not be identified confidently.")
         .child("In TUI, run /status and leave its result visible. Then return here and check again.")
-        .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t))
-        .child(this.button("identify-retry", "Check again", (_e, cx) => { this.sig = null; this.check(cx); cx.notify(); }, t))
+        .child(h_flex().w_full().flex_none().gap(8).items_center()
+          .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t).w_auto())
+          .child(this.button("identify-retry", "Check again", (_e, cx) => { this.sig = null; this.check(cx); cx.notify(); }, t).w_auto()))
         .when(Boolean(this.error), el => el.child(String(this.error)));
     }
     return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).text_size(15)
