@@ -34,14 +34,28 @@ export class Outbox {
     if (["idle", "done"].includes(status) && (this.gate.sawBusy ||
       (Number.isSafeInteger(turn) && Number.isSafeInteger(this.gate.turn) && turn > this.gate.turn))) this.gate = null;
   }
+  retryReason(context, id) {
+    const item = this.items.find(item => item.id === id);
+    if (!item) return "Message is no longer available.";
+    if (!context.scope) return "Identify the current session before retrying.";
+    const before = item.scope?.split(":"), now = context.scope.split(":");
+    const sameSession = before?.length === 3 && now.length === 3 && before[0] === now[0] && before[2] === now[2];
+    if (item.scope !== context.scope && !sameSession) return "Return to the original session to retry.";
+    if (this.items.some(message => message.state === "sending")) return "Another message is being sent. Try again when it finishes.";
+    if (context.status === "blocked") return "Answer the terminal prompt before retrying.";
+    if (!["idle", "done", "working", "error"].includes(context.status)) return "Waiting for the terminal to become ready.";
+    return null;
+  }
   claim(context, id = null) {
     this.observe(context);
     if (!context.scope || this.items.some(item => item.state === "sending")) return null;
     if (!["idle", "done", "working", ...(id ? ["error"] : [])].includes(context.status)) return null;
+    if (id && this.retryReason(context, id)) return null;
     const item = id ? this.items.find(item => item.id === id)
       : this.items.find(item => item.scope === context.scope && !(item.direct && item.state === "error"));
-    if (!item || item.scope !== context.scope || item.state === "sending") return null;
+    if (!item || (!id && item.scope !== context.scope) || item.state === "sending") return null;
     if (!id && ((this.gate?.scope === context.scope) || item.state !== "queued" || !["idle", "done"].includes(context.status))) return null;
+    if (id) item.scope = context.scope;
     this.previousGate = this.gate;
     this.gate = { scope: context.scope, turn: context.turn, sawBusy: false };
     item.state = "sending";

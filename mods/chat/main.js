@@ -1429,6 +1429,10 @@ export default class Chat extends View {
     if (this.dialog || !this.outbox) return;
     const context = this.queueContext();
     if (!id && this.t?.issue?.usage) return;
+    if (id) {
+      const reason = this.outbox.retryReason(context, id);
+      if (reason) { notify({ title: "Cannot send yet", body: reason, level: "warning" }); return; }
+    }
     const item = this.outbox.claim(context, id);
     this.saveOutbox();
     if (!item) return;
@@ -1459,19 +1463,19 @@ export default class Chat extends View {
   failedSendsView(t) {
     const items = this.outbox.failedItems;
     if (!items.length) return null;
-    const scope = this.queueContext().scope;
+    const context = this.queueContext();
     return h_flex().w_full().justify_center().child(v_flex().w_full().max_w(900).gap(6)
       .children(items.map(item => v_flex().id(`failed-send-${item.id}`).w_full().gap(5).px(12).py(9)
         .rounded(10).border_1().border_color(t.blocked).bg(t.background)
         .child(h_flex().gap(8).items_center()
           .child(div().flex_1().text_size(12).text_color(t.blocked).child("Failed to send"))
           .child(this.button(`retry-send-${item.id}`, "Retry", (_e, cx) => this.pumpOutbox(cx, item.id), t)
-            .when(scope !== item.scope, button => button.opacity(0.4)))
+            .when(Boolean(this.outbox.retryReason(context, item.id)), button => button.opacity(0.4)))
           .child(this.button(`remove-failed-${item.id}`, "Remove", (_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }, t)))
         .child(div().truncate().text_size(12.5).text_color(t.foreground).tooltip(item.text).child(summaryLine(item.text)))
         .when(item.attachments.length > 0, row => row.child(div().text_size(11).text_color(t.muted)
           .child(`${item.attachments.length} ${item.attachments.length === 1 ? "attachment" : "attachments"}`)))
-        .child(div().text_size(11).text_color(t.muted).child(scope !== item.scope ? "Return to the original session to retry." : item.error)))));
+        .child(div().text_size(11).text_color(t.muted).child(this.outbox.retryReason(context, item.id) ?? item.error)))));
   }
 
   outboxView(t) {

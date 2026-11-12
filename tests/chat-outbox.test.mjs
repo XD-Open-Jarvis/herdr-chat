@@ -90,3 +90,21 @@ test('an idle send interrupted by a terminal menu stays recoverable without appe
  q.claim(idle);q.finish(item.id,'Waiting for your selection',true);
  assert.equal(q.visibleItems.length,0);assert.equal(q.failedItems[0].text,'draft');
 });
+test('explicit retry follows the same terminal session after a process restart, but auto delivery does not',()=>{
+ const q=new Outbox();const old={scope:'t1:42:session-a',status:'idle'};
+ const item=q.enqueue({text:'retry',paths:[],attachments:[],direct:true},old.scope);
+ q.claim(old);q.finish(item.id,'offline');
+ const resumed={...old,scope:'t1:99:session-a'};
+ assert.equal(q.claim(resumed),null);
+ assert.equal(q.retryReason(resumed,item.id),null);
+ assert.equal(q.claim(resumed,item.id),item);
+ assert.equal(item.scope,resumed.scope);
+});
+test('explicit retry rejects a different terminal or session and explains blocked delivery',()=>{
+ const q=new Outbox();const item=add(q,'retry');
+ assert.match(q.retryReason({...idle,scope:'different:pid:session'},item.id),/original session/);
+ assert.match(q.retryReason({...idle,scope:'terminal:pid:other'},item.id),/original session/);
+ assert.equal(q.claim({...idle,scope:'terminal:pid:other'},item.id),null);
+ assert.match(q.retryReason({...idle,status:'blocked'},item.id),/terminal prompt/);
+ assert.match(q.retryReason({...idle,scope:null},item.id),/Identify/);
+});
