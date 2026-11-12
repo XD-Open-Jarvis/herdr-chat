@@ -2022,7 +2022,7 @@ export default class Chat extends View {
 
   // Render terminal output as selectable literal text, without Markdown's
   // fenced-code frame/language badge. Long output expands explicitly.
-  plainOutput(id, text, t, error = false, framed = true) {
+  plainOutput(id, text, t, error = false, framed = true, maxHeight = null) {
     const lines = text.split("\n"), long = lines.length > 12 || text.length > 900;
     const open = this.open.has(`output-${id}`);
     const shown = long && !open ? lines.slice(0, 12).join("\n").slice(0, 900) : text;
@@ -2030,7 +2030,9 @@ export default class Chat extends View {
       .replace(/\t/g, "    ");
     const short = !long && lines.length <= 2;
     return v_flex().w_full().min_w(0).gap(4)
-      .child(div().w_full().min_w(0).text_size(!framed ? 12 : short ? 12.5 : 11.5).text_color(error ? t.blocked : t.muted)
+      .child(div().w_full().min_w(0)
+        .when(maxHeight != null, el => el.id(`${id}-scroll`).max_h(maxHeight).overflow_y_scrollbar())
+        .text_size(!framed ? 12 : short ? 12.5 : 11.5).text_color(error ? t.blocked : t.muted)
         .when(error || (!short && framed), el => el.px(12).py(8).rounded(8).bg(t.surface).border_1().border_color(error ? t.blocked : t.border))
         .when((!short || !framed) && Boolean(settings().font_family), el => el.font_family(settings().font_family))
         .child(TextView.html(id, `<pre>${escaped}</pre>`).selectable(true).text_color(error ? t.blocked : t.muted)
@@ -2219,11 +2221,9 @@ export default class Chat extends View {
     return v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8).rounded(12)
       .border_1().border_color(item.error ? t.blocked : t.input).bg(t.surface)
       .child(div().text_size(12).text_color(t.muted).child("Shell"))
-      .child(div().id(`${id}-input-scroll`).w_full().min_w(0).max_h(240).overflow_y_scrollbar()
-        .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false)))
+      .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false, 240))
       .when(Boolean(item.result?.trim()), el => el.child(div().w_full().min_w(0).pt(8).border_t(1).border_color(t.border)
-        .child(div().id(`${id}-output-scroll`).w_full().min_w(0).max_h(320).overflow_y_scrollbar()
-          .child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false)))))
+        .child(this.plainOutput(`${id}-shell-output`, item.result, t, item.error, false, 320))))
       .child(h_flex().justify_end().text_size(11.5).text_color(item.error ? t.blocked : t.dim)
         .child(item.error ? `✕ Failed${item.exitCode != null ? ` · exit ${item.exitCode}` : ""}`
           : running ? "Running…" : pendingOutput ? "Output pending" : item.result === null ? "Pending" : "✓ Success"));
