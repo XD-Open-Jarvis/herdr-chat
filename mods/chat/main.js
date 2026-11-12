@@ -30,6 +30,7 @@ import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
 import { live } from "./stream.js";
 import { withPending } from "./timeline.js";
 import { ChatAttention } from "./attention.js";
+import { IdentifyFeedback, identifyKey } from "./identify.js";
 import { herdr, chatTab, away, hide, show, switchView } from "./backstage.js";
 
 const ASK_FIRST = "Answer the question above first.";
@@ -1194,6 +1195,8 @@ export default class Chat extends View {
     }
     const kind = agentKind(term);
     const titleIdentity = kind === "codex" && codexTitleIdentity(term);
+    this.identifyFeedback ??= new IdentifyFeedback();
+    this.identifyFeedback.begin(identifyKey(term, titleIdentity));
     const seen = this.attention.update(term, { visible, active: appWindow().active,
       ready: Boolean(this.t?.entries.length) && (kind !== "codex" || this.sessionResolved)
         && (!titleIdentity || titleMatchesFile(titleIdentity, this.file)) }, async (address, turn) => {
@@ -1279,7 +1282,10 @@ export default class Chat extends View {
           }
           this.error = String(e?.message ?? e);
         }
-        finally { this.locating = false; cx.notify(); }
+        finally {
+          if (stillCurrent()) this.identifyFeedback.finish(this.sessionResolved);
+          this.locating = false; cx.notify();
+        }
       });
     }
     if (kind) this.loadCatalog(kind, machineOf(this.term), cx);
@@ -2365,8 +2371,12 @@ export default class Chat extends View {
     const titleIdentity = codexTitleIdentity(term);
     const changedTitle = titleIdentity && this.file && !titleMatchesFile(titleIdentity, this.file);
     if (!this.dialog && agentKind(term) === "codex" && (!this.sessionResolved || changedTitle)) {
+      if (!this.identifyFeedback?.needsAction(identifyKey(term, titleIdentity))) {
+        return v_flex().id("root").size_full().bg(t.background).text_color(t.dim).p(24)
+          .child("Loading conversation…");
+      }
       return v_flex().id("root").size_full().bg(t.background).text_color(t.foreground).p(24).gap(12)
-        .child(this.locating || changedTitle ? "Identifying the conversation…" : "The current conversation could not be identified confidently.")
+        .child("The current conversation could not be identified confidently.")
         .child("In TUI, run /status and leave its result visible. Then return here and check again.")
         .child(h_flex().w_full().flex_none().gap(8).items_center()
           .child(this.button("identify-tui", "Show TUI", (_e, cx) => this.showTerminal(cx), t).w_auto())
