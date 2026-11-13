@@ -33,13 +33,13 @@ test('historical changes are grouped per turn and placed after the response',()=
  const entries=[{kind:'user',key:'u',text:'fix'},{kind:'tools',key:'t',items:[edit]},
   {kind:'assistant',key:'a',text:'done'},{kind:'notice',event:'completed',key:'done'},
   {kind:'user',key:'u2',text:'next'}];
- const shown=withChanges(entries);assert.deepEqual(shown.map(e=>e.kind),['user','tools','assistant','changes','notice','user']);
- assert.equal(shown[3].files[0].path,'/repo/main.js');assert.equal(entries.length,5);
+ const shown=withChanges(entries);assert.deepEqual(shown.map(e=>e.kind),['user','assistant','changes','notice','user']);
+ assert.equal(shown[2].files[0].path,'/repo/main.js');assert.equal(entries.length,5);
 });
 test('failed and pending edits never claim applied file changes; acknowledgements invalidate cached descriptions',()=>{
  const edit=wrapped(`await tools.apply_patch(${JSON.stringify(patch)})`,null);
  const entries=[{kind:'tools',key:'t',items:[edit]}];
- assert.equal(withChanges(entries).length,1);edit.result='ok';assert.equal(withChanges(entries).length,2);
+ assert.equal(withChanges(entries).length,1);edit.result='ok';assert.equal(withChanges(entries).length,1);
  edit.error=true;assert.equal(withChanges(entries).length,1);
 });
 test('Claude replacement edits have an inline diff but replace-all does not invent a change count',()=>{
@@ -57,6 +57,9 @@ test('a wrapper containing both a patch and a command retains both operations',(
  const detail=toolDetails(wrapped(`await tools.apply_patch(${JSON.stringify(patch)});await tools.exec_command({cmd:"npm test"});`));
  assert.ok(detail.summary.includes('main.js'));assert.ok(detail.summary.includes('npm test'));
  assert.ok(detail.displayInput.includes('*** Begin Patch'));assert.ok(detail.displayInput.includes('npm test'));
+ const entries=withChanges([{kind:'tools',key:'mixed',items:[wrapped(`await tools.apply_patch(${JSON.stringify(patch)});await tools.exec_command({cmd:"npm test"});`)]}]);
+ assert.deepEqual(entries.map(entry=>entry.kind),['tools','changes']);
+ assert.equal(entries[0].items.length,1);
 });
 test('nested tool and patch verification failures never produce an applied-change card',()=>{
  for(const result of ['apply_patch verification failed: missing context','Error: cannot patch','{"exit_code":1,"output":"bad"}','{"isError":true}']){
@@ -84,4 +87,26 @@ test('ES6 unicode code-point escapes in exec scripts and CRLF patches parse clea
  const changes=patchChanges(crlfPatch);
  assert.equal(changes.length,1);assert.equal(changes[0].path,'/repo/win.js');
  assert.equal(changes[0].added,1);assert.equal(changes[0].removed,1);
+});
+test('Write, TodoWrite and update_plan extract file additions and normalized plan checklists',()=>{
+ const wrote=toolDetails({name:'Write',input:{file_path:'/repo/new.js',content:'line 1\nline 2'},result:'ok'});
+ assert.equal(wrote.name,'Edit');
+ assert.equal(wrote.changes.length,1);
+ assert.equal(wrote.changes[0].operation,'add');
+ assert.equal(wrote.changes[0].path,'/repo/new.js');
+ assert.ok(wrote.changes[0].diff.includes('+line 1'));
+
+ const todo=toolDetails({name:'TodoWrite',input:{todos:[{content:'Step A',status:'completed'},{content:'Step B',activeForm:'Running B',status:'in_progress'}]},result:'ok'});
+ assert.equal(todo.name,'Plan');
+ assert.equal(todo.summary,'1/2 done');
+ assert.deepEqual(todo.todos,[
+  {text:'Step A',activeForm:'',status:'completed'},
+  {text:'Step B',activeForm:'Running B',status:'in_progress'},
+ ]);
+
+ const plan=toolDetails({name:'update_plan',input:{explanation:'Rollout',plan:[{step:'One',status:'completed'},{step:'Two',status:'pending'}]},result:'ok'});
+ assert.equal(plan.name,'Plan');
+ assert.equal(plan.planExplanation,'Rollout');
+ assert.equal(plan.todos.length,2);
+ assert.equal(plan.todos[1].text,'Two');
 });

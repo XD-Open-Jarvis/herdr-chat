@@ -2,7 +2,7 @@
 // rendered as markdown with images, and a composer that types into it.
 // Opened as a dialog (mod.open:chat, Cmd+N) it is the New chat form: it starts
 // the agent in a new space and opens its client-local conversation view.
-import { View, div, image, svg } from "gpui-kit";
+import { View, div, image, svg, PathBuilder } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea, Popover, HoverCard, InputState, Input } from "gpui-base";
 import {
   exec, hc, run, props, terminals, panes, spaces, theme, settings, appHome, home,
@@ -23,7 +23,7 @@ import { bindingKey, chooseBinding } from "./binding.js";
 import { Tail, locate, agentKind, machineOf } from "./source.js";
 import { catalog, launchArgv, modelName, switchModel, CLAUDE_EFFORTS } from "./models.js";
 import { emojify, emojiMatches } from "./emoji.js";
-import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
+import { parsePrompt, choose, toggleChoice, menuAtBottom } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
@@ -132,6 +132,67 @@ const shortcut = (key) => (MAC ? `⌘${key}` : `Ctrl+${key}`);
 const modeOf = (screen) => /accept edits on/i.test(screen) ? "acceptEdits" : /plan mode on/i.test(screen) ? "plan"
   : /auto mode on/i.test(screen) ? "auto" : /bypass permissions on/i.test(screen) ? "bypassPermissions" : "default";
 
+// Normalizes Codex (primary/secondary) and Claude (five_hour/seven_day) rate-limit snapshots.
+function normalizeRateLimits(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const pick = (w, ...pctKeys) => {
+    if (!w || typeof w !== "object") return null;
+    let pct = null;
+    for (const k of pctKeys) {
+      if (typeof w[k] === "number" && Number.isFinite(w[k])) { pct = w[k]; break; }
+    }
+    if (pct == null) return null;
+    const resetsAt = w.resetsAt ?? w.resets_at ?? null;
+    return { pct: Math.max(0, Math.min(100, Math.round(pct))), resetsAt: resetsAt ?? null };
+  };
+  const fiveHour = pick(raw.fiveHour ?? raw.five_hour ?? raw.primary, "pct", "utilization", "usedPercent", "used_percent");
+  const sevenDay = pick(raw.sevenDay ?? raw.seven_day ?? raw.secondary, "pct", "utilization", "usedPercent", "used_percent");
+  return fiveHour || sevenDay ? { fiveHour, sevenDay } : null;
+}
+
+const RING_SIZE = 13;
+const RING_STROKE = 1.65;
+const RING_PATHS = new Map();
+function ringArcPath(pct) {
+  const key = Math.max(0, Math.min(100, Math.round(pct)));
+  let cached = RING_PATHS.get(key);
+  if (cached !== undefined) return cached;
+  const c = RING_SIZE / 2;
+  const r = c - RING_STROKE / 2 - 0.9;
+  const top = c - r;
+  if (key === 100) {
+    cached = PathBuilder.stroke(RING_STROKE)
+      .move_to(c, top)
+      .arc_to(r, r, 0, false, true, c, c + r)
+      .arc_to(r, r, 0, false, true, c, top)
+      .build();
+  } else if (key === 0) {
+    cached = null;
+  } else {
+    const a = (key / 100) * 2 * Math.PI - Math.PI / 2;
+    const tx = Number((c + r * Math.cos(a)).toFixed(3));
+    const ty = Number((c + r * Math.sin(a)).toFixed(3));
+    cached = PathBuilder.stroke(RING_STROKE)
+      .move_to(c, top)
+      .arc_to(r, r, 0, key > 50, true, tx, ty)
+      .build();
+  }
+  RING_PATHS.set(key, cached);
+  return cached;
+}
+
+function ringIcon(pct, color, trackColor) {
+  const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+  if (typeof PathBuilder === "undefined" || typeof window === "undefined" || typeof window?.paint_path !== "function") {
+    return div().size(RING_SIZE).flex_none().rounded_full().border_1().border_color(color);
+  }
+  const track = ringArcPath(100);
+  const arc = clamped > 0 ? ringArcPath(clamped) : null;
+  return div().relative().size(RING_SIZE).flex_none()
+    .child(window.paint_path(track, trackColor).absolute().inset_0())
+    .when(Boolean(arc), (el) => el.child(window.paint_path(arc, color).absolute().inset_0()));
+}
+
 // Hints a terminal shows while one of its pickers or panels is open.
 const DIALOG = /(esc to (cancel|close|exit|go back|dismiss)|enter to (select|confirm|continue|save|apply)|to navigate|↑\/↓|↑↓|(?<!shift\+)tab to switch|space to (toggle|select)|press esc|esc back|enter continue|\besc close\b)/i;
 
@@ -220,6 +281,9 @@ export default class Chat extends View {
     this.cfg = { kind: shared("chat.kind") ?? "claude", machine,
       folder: this.dialog ? p.folder ?? this.defaultFolder(machine) : null, model: null, effort: null };
 
+    this.drafts = {};
+    this.historyIdx = null;
+    this.historyDraft = "";
     this.input = TextareaState.new({ placeholder: this.dialog ? "What should the agent do? (optional)" : "Ask anything · / for commands" });
     this.input.set_auto_grow(1, 10);
     this.input.on("submit", (e, cx) => { if (!e?.shift) this.send(cx); });
@@ -227,12 +291,20 @@ export default class Chat extends View {
     this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
     this.input.on("change", (_e, cx) => {
+      if (!this.settingHistory) this.historyIdx = null;
       this.emojifyInput();
       this.updateEmoji(cx);
       this.updateMention(cx);
       cx.notify();
     });
     if (!this.presentation || this.chatVisible()) this.input.focus();
+    this.promptInput = InputState.new({ placeholder: "Type a custom reply and press Enter…" });
+    this.promptInput.on("submit", (_e, cx) => {
+      const value = this.promptInput.value().trim();
+      if (!value) return;
+      this.promptInput.set_value("");
+      this.submitCustomPrompt(value, cx);
+    });
     this.search = InputState.new({ placeholder: "Search this conversation" });
     this.search.on("change", (_e, cx) => { this.off = 0; cx.notify(); });
     this.sideInput = TextareaState.new({ placeholder: "Ask about this conversation…" });
@@ -363,15 +435,68 @@ export default class Chat extends View {
     });
   }
 
+  // Fetches 5h / 7d rate limits for Claude and Codex in the background so the
+  // composer footer stays updated without waiting for /usage.
+  loadUsageLimits(term, kind, cx, force = false) {
+    const folder = term?.foreground?.cwd ?? term?.cwd ?? null;
+    const key = kind && folder ? `${kind}|${machineOf(this.term) ?? ""}` : null;
+    if (!key) { this.limitsKey = null; this.rateLimits = null; return; }
+    if (key !== this.limitsKey) {
+      this.limitsKey = key;
+      this.limitsAt = 0;
+      this.limitsEpoch = 0;
+      this.limitsLoading = false;
+      try { this.rateLimits = normalizeRateLimits(JSON.parse(localStorage.getItem(`limits1:${key}`) ?? "null")); } catch { this.rateLimits = null; }
+    }
+    if (kind === "codex" && this.t?.limits) {
+      const live = normalizeRateLimits(this.t.limits);
+      if (live) {
+        this.rateLimits = live;
+        try { localStorage.setItem(`limits1:${key}`, JSON.stringify(live)); } catch {}
+        if (!force) return;
+      }
+    }
+    const st = this.t?.turnState ?? this.t?.codexTurn;
+    const doneEpoch = (st?.stage === "completed" || st?.stage === "idle") ? (st.epoch ?? 0) : 0;
+    const stale = !this.limitsAt || Date.now() - this.limitsAt > 180000;
+    const turnDone = doneEpoch > 0 && doneEpoch !== this.limitsEpoch;
+    if (!force && !stale && !turnDone) return;
+    if (this.limitsLoading) return;
+    this.limitsLoading = true;
+    this.limitsAt = Date.now();
+    if (doneEpoch > 0) this.limitsEpoch = doneEpoch;
+    cx.spawn(async (cx) => {
+      try {
+        let raw = null;
+        if (kind === "codex") {
+          const [limits] = await codexCalls(folder, [["account/rateLimits/read", null]], machineOf(this.term)).catch(() => [null]);
+          raw = limits?.rateLimits ?? null;
+        } else if (kind === "claude") {
+          const [u] = await control(folder, null, [{ subtype: "get_usage" }], { on: machineOf(this.term), timeout: 25 }).catch(() => [null]);
+          raw = u?.rate_limits ?? null;
+        }
+        const norm = normalizeRateLimits(raw);
+        if (this.limitsKey === key && norm) {
+          this.rateLimits = norm;
+          try { localStorage.setItem(`limits1:${key}`, JSON.stringify(norm)); } catch {}
+          cx.notify();
+        }
+      } catch {}
+      finally {
+        if (this.limitsKey === key) this.limitsLoading = false;
+      }
+    });
+  }
+
   ensureFollow(kind, cx, graceMs = 1500) {
     if (!kind || !this.chatVisible() || !this.term) return;
-    if (kind !== "codex") {
+    if (kind !== "codex" && kind !== "claude") {
       if (!this.streamLoop && this.terminal()?.status === "working") this.follow(kind, cx);
       return;
     }
     if (this.streamLoop) {
       if (!this.streamLoop.exiting) {
-        if (this.streamLoop.kind === "codex" && graceMs > 0) {
+        if (this.streamLoop.kind === kind && graceMs > 0) {
           const until = Date.now() + graceMs;
           if (until > (this.streamLoop.graceUntil ?? 0)) this.streamLoop.graceUntil = until;
         }
@@ -379,11 +504,11 @@ export default class Chat extends View {
       }
       if (this.codexHandoff?.draining) this.codexHandoff.endDrain();
     }
-    this.follow("codex", cx, graceMs);
+    this.follow(kind, cx, graceMs);
   }
 
   codexMinCompletedEpoch() {
-    const st = this.t?.codexTurn;
+    const st = this.t?.turnState ?? this.t?.codexTurn;
     if (!st) return 1;
     const epoch = st.epoch ?? 0;
     if (st.stage === "completed" || st.stage === "idle") return epoch + 1;
@@ -391,38 +516,46 @@ export default class Chat extends View {
   }
 
   beforeCodexPending() {
-    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
-    (this.codexHandoff ??= new CodexHandoff()).noteUserSend(this.t?.codexTurn ?? null);
+    const kind = this.t?.kind ?? agentKind(this.terminal());
+    if (kind !== "codex" && kind !== "claude") return;
+    (this.codexHandoff ??= typeof CodexHandoff === "function" ? new CodexHandoff() : null)?.noteUserSend(this.t?.turnState ?? this.t?.codexTurn ?? null);
     this.stream = null;
     this.running = null;
   }
 
   afterCodexPending(cx, context, item) {
-    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
+    const kind = this.t?.kind ?? agentKind(this.terminal());
+    if (kind !== "codex" && kind !== "claude") return;
     this.tracer?.record("outbox_claim", {
       id: item?.id ?? null,
       direct: Boolean(item?.direct),
       status: context?.status ?? null,
       len: item?.text?.length ?? 0,
     });
-    if (this.chatVisible()) this.ensureFollow("codex", cx, 1800);
+    if ((Object.hasOwn(this, "chatVisible") || typeof ownerPane === "function") && this.chatVisible()) {
+      this.ensureFollow(kind, cx, 1800);
+    }
   }
 
   beforeCodexDirectSend(text) {
-    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
-    if (!/^[\/!]/.test(text)) (this.codexHandoff ??= new CodexHandoff()).noteUserSend(this.t?.codexTurn ?? null);
+    const kind = this.t?.kind ?? agentKind(this.terminal());
+    if (kind !== "codex" && kind !== "claude") return;
+    if (!/^[\/!]/.test(text)) (this.codexHandoff ??= typeof CodexHandoff === "function" ? new CodexHandoff() : null)?.noteUserSend(this.t?.turnState ?? this.t?.codexTurn ?? null);
     this.tracer?.record("send", { direct: true, command: /^[\/!]/.test(text), len: text.length });
   }
 
   afterCodexDirectSend(text, cx) {
-    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
-    if (!/^[\/!]/.test(text) && this.chatVisible()) this.ensureFollow("codex", cx, 1800);
+    const kind = this.t?.kind ?? agentKind(this.terminal());
+    if (kind !== "codex" && kind !== "claude") return;
+    if (!/^[\/!]/.test(text) && (Object.hasOwn(this, "chatVisible") || typeof ownerPane === "function") && this.chatVisible()) {
+      this.ensureFollow(kind, cx, 1800);
+    }
   }
 
   // While the agent works: the reply it's writing, read off its terminal a few
   // times a second, until the log has it.
   follow(kind, cx, graceMs = 0) {
-    if (kind !== "codex") {
+    if (kind !== "codex" && kind !== "claude") {
       const loop = (this.streamLoop = {});
       cx.spawn(async (cx) => {
         while (this.streamLoop === loop && this.terminal()?.status === "working" && this.chatVisible()) {
@@ -430,9 +563,6 @@ export default class Chat extends View {
           if (this.streamLoop !== loop || !this.chatVisible()) break;
           const now = r ? live(r.stdout, kind) : null;
           const text = now?.kind === "text" ? now.text : null;
-          // Between steps the screen can show nothing new, or only text the chat
-          // already has: keep the last command's card rather than drop it and
-          // bring one back (the page would jump). New reply text replaces it.
           const fresh = text && !this.logged(text);
           const run = now?.kind === "run" ? now : fresh ? null : this.running;
           if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
@@ -448,17 +578,18 @@ export default class Chat extends View {
       return;
     }
 
-    const loop = (this.streamLoop = { kind: "codex", exiting: false, graceUntil: graceMs > 0 ? Date.now() + graceMs : 0 });
+    const turnState = () => this.t?.turnState ?? this.t?.codexTurn ?? null;
+    const loop = (this.streamLoop = { kind, exiting: false, graceUntil: graceMs > 0 ? Date.now() + graceMs : 0 });
     cx.spawn(async (cx) => {
       if (this.chatVisible()) {
         this.tracer?.record("follow_start", {
           graceMs,
           status: this.terminal()?.status ?? null,
-          stage: this.t?.codexTurn?.stage ?? null,
+          stage: turnState()?.stage ?? null,
         });
       }
       const handoffOpts = () => ({
-        codexTurn: this.t?.codexTurn ?? null,
+        codexTurn: turnState(),
         pendingCount: this.pending?.length ?? 0,
         termStatus: this.terminal()?.status ?? null,
         hasPriorAssistant: (this.t?.entries ?? []).some((e) => e.kind === "assistant"),
@@ -477,25 +608,26 @@ export default class Chat extends View {
         }
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
         if (this.streamLoop !== loop || !this.chatVisible()) break;
-        const handoff = (this.codexHandoff ??= new CodexHandoff());
-        const snap = r ? liveSnapshot(r.stdout, "codex") : null;
+        const handoff = (this.codexHandoff ??= typeof CodexHandoff === "function" ? new CodexHandoff() : null);
+        const snap = r ? liveSnapshot(r.stdout, kind) : null;
+        if (!handoff) { await sleep(cx, 350); continue; }
         let res = handoff.update(snap, handoffOpts());
         this.tracer?.record("follow_frame", {
-          sig: `${res.reason}|${res.shouldDrainBeforeDrop}|${snap?.item?.kind ?? "none"}|${snap?.blockOrdinal ?? 0}|${snap?.workedAfterAt ?? false}|${snap?.statusAfterAt ?? false}|${this.t?.codexTurn?.stage ?? "none"}|${res.streamText?.length ?? 0}`,
+          sig: `${res.reason}|${res.shouldDrainBeforeDrop}|${snap?.item?.kind ?? "none"}|${snap?.blockOrdinal ?? 0}|${snap?.workedAfterAt ?? false}|${snap?.statusAfterAt ?? false}|${turnState()?.stage ?? "none"}|${res.streamText?.length ?? 0}`,
           reason: res.reason,
           shouldDrain: res.shouldDrainBeforeDrop,
           itemKind: snap?.item?.kind ?? null,
           blockOrdinal: snap?.blockOrdinal ?? 0,
           workedAfterAt: Boolean(snap?.workedAfterAt),
           statusAfterAt: Boolean(snap?.statusAfterAt),
-          stage: this.t?.codexTurn?.stage ?? null,
+          stage: turnState()?.stage ?? null,
           streamLen: res.streamText?.length ?? 0,
         });
         if (res.shouldDrainBeforeDrop) {
-          this.tracer?.record("follow_drain", { phase: "mid_turn", stage: this.t?.codexTurn?.stage ?? null });
+          this.tracer?.record("follow_drain", { phase: "mid_turn", stage: turnState()?.stage ?? null });
           handoff.beginDrain();
           await this.flushTail(cx);
-          if (snap?.workedAfterAt && !machineOf(this.term) && this.streamLoop === loop && this.chatVisible() && handoff.visibleStream(this.t?.codexTurn)) {
+          if (snap?.workedAfterAt && !machineOf(this.term) && this.streamLoop === loop && this.chatVisible() && handoff.visibleStream(turnState())) {
             await sleep(cx, 100);
             if (this.streamLoop === loop && this.chatVisible()) await this.flushTail(cx);
           }
@@ -506,7 +638,7 @@ export default class Chat extends View {
           handoff.endDrain({ keepRun: true });
           res = handoff.update(snap, handoffOpts());
         }
-        const nextStream = handoff.visibleStream(this.t?.codexTurn);
+        const nextStream = handoff.visibleStream(turnState());
         const nextRun = res.running;
         if (nextStream !== this.stream || JSON.stringify(nextRun) !== JSON.stringify(this.running)) {
           this.stream = nextStream;
@@ -517,16 +649,17 @@ export default class Chat extends View {
       }
       if (this.streamLoop === loop) {
         loop.exiting = true;
-        const stillVisible = this.codexHandoff?.visibleStream(this.t?.codexTurn);
+        const st = turnState();
+        const stillVisible = this.codexHandoff?.visibleStream(st);
         const needsTailDrain =
           Boolean(stillVisible) ||
           Boolean(this.pending?.length) ||
-          this.t?.codexTurn?.stage === "awaiting_text";
+          st?.stage === "awaiting_text";
         if (needsTailDrain) {
-          this.tracer?.record("follow_drain", { phase: "exit", stage: this.t?.codexTurn?.stage ?? null });
+          this.tracer?.record("follow_drain", { phase: "exit", stage: turnState()?.stage ?? null });
           this.codexHandoff?.beginDrain();
           await this.flushTail(cx);
-          if (!machineOf(this.term) && (this.pending?.length || this.t?.codexTurn?.stage === "awaiting_text")) {
+          if (!machineOf(this.term) && (this.pending?.length || turnState()?.stage === "awaiting_text")) {
             await sleep(cx, 120);
             if (this.streamLoop === loop) await this.flushTail(cx);
           }
@@ -534,7 +667,7 @@ export default class Chat extends View {
         if (this.streamLoop === loop) {
           this.codexHandoff?.finishFollow();
           this.tracer?.record("follow_exit", {
-            stage: this.t?.codexTurn?.stage ?? null,
+            stage: turnState()?.stage ?? null,
             hadStream: Boolean(stillVisible),
           });
           this.streamLoop = null;
@@ -616,7 +749,7 @@ export default class Chat extends View {
         .child(svg(`mods/chat/icons/${icon}.svg`).size(13));
       return div().w_full().relative()
         .child(this.markdown(id, `${p.fence}\n${p.code}\n${p.fence}`))
-        .child(h_flex().absolute().top(6).right(6).gap(4).items_center()
+        .child(h_flex().absolute().top(5).right(6).gap(4).items_center().px(6).py(2).rounded(6).bg(t.popover).border(0.5).border_color(t.border)
           .when(Boolean(p.lang), (el) => el.child(div().pr(4).text_size(11).text_color(t.dim).child(p.lang)))
           .child(btn("copy", done ? "check" : "copy", done ? "Copied" : "Copy", (_e, cx) => this.copyOut(p.code, id, cx)))
           .child(con
@@ -680,8 +813,9 @@ export default class Chat extends View {
 
   // The streamed reply, unless the log already has it.
   streamShown() {
-    if ((this.t?.kind ?? agentKind(this.terminal())) === "codex") {
-      return this.codexHandoff?.visibleStream(this.t?.codexTurn) ?? null;
+    const kind = this.t?.kind ?? agentKind(this.terminal());
+    if ((kind === "codex" || kind === "claude") && this.codexHandoff) {
+      return this.codexHandoff.visibleStream(this.t?.turnState ?? this.t?.codexTurn) ?? null;
     }
     return this.stream && !this.logged(this.stream) ? this.stream : null;
   }
@@ -931,7 +1065,41 @@ export default class Chat extends View {
       if (map[e.keystroke]) { this.panelKeys(map[e.keystroke]); cx.stop_propagation(); return cx.notify(); }
     }
     const m = this.slash();
-    if (!m) return;
+    if (!m) {
+      const k = e.keystroke;
+      if (!this.dialog && (k === "up" || k === "down")) {
+        const val = this.input.value();
+        if (!val.includes("\n")) {
+          const hist = [];
+          for (const en of this.t?.entries ?? []) {
+            if (en.kind === "user" && !en.command && en.text?.trim() && hist.at(-1) !== en.text) hist.push(en.text);
+          }
+          if (k === "up" && hist.length) {
+            if (this.historyIdx == null) { this.historyDraft = val; this.historyIdx = hist.length - 1; }
+            else if (this.historyIdx > 0) this.historyIdx--;
+            this.settingHistory = true;
+            this.input.set_value(hist[this.historyIdx]);
+            this.settingHistory = false;
+            cx.stop_propagation();
+            return cx.notify();
+          }
+          if (k === "down" && this.historyIdx != null) {
+            this.settingHistory = true;
+            if (this.historyIdx + 1 < hist.length) {
+              this.historyIdx++;
+              this.input.set_value(hist[this.historyIdx]);
+            } else {
+              this.historyIdx = null;
+              this.input.set_value(this.historyDraft ?? "");
+            }
+            this.settingHistory = false;
+            cx.stop_propagation();
+            return cx.notify();
+          }
+        }
+      }
+      return;
+    }
     const k = e.keystroke;
     if (k === "up" || k === "down" || k === "ctrl-p" || k === "ctrl-n") {
       const d = k === "up" || k === "ctrl-p" ? -1 : 1;
@@ -1039,11 +1207,10 @@ export default class Chat extends View {
     const kind = this.current().kind;
     this.mode = { id: mode.id, logged: this.t?.mode };
     cx.spawn(async (cx) => {
-      const sleep = (s) => exec("sh", ["-c", `sleep ${s}`]);
       if (kind === "codex") {
         await hc(["send", this.term, "/permissions"]);
         for (let i = 0; i < 15; i++) {
-          await sleep(0.3);
+          await sleep(cx, 300);
           const lines = (await hc(["read", this.term, "--lines", "20"])).stdout.split("\n");
           const row = lines.map((l) => /^\s*(?:›\s*)?(\d)\.\s+(.*)$/.exec(l)).find((m) => m && mode.match.test(m[2]));
           if (row) { await hc(["keys", this.term, row[1]]); return cx.notify(); }
@@ -1057,7 +1224,7 @@ export default class Chat extends View {
         const screen = (await hc(["read", this.term, "--lines", "3"])).stdout;
         if (modeOf(screen) === mode.id) break;
         await hc(["keys", this.term, "shift+tab"]);
-        await sleep(0.35);
+        await sleep(cx, 350);
       }
       // Not every mode is in the cycle (bypass needs a flag at launch): say where it ended up.
       this.readMode(cx);
@@ -1197,7 +1364,16 @@ export default class Chat extends View {
           ["Context", ctx?.window ? `${Math.round(100 * ctx.used / ctx.window)}% full · ${ctx.used.toLocaleString()} of ${ctx.window.toLocaleString()} tokens` : null],
           ["Account", [account?.account?.email, limits?.rateLimits?.planType].filter(Boolean).join(" · ")],
         ].filter(([, v]) => v) });
-        else Object.assign(e, { codex: limits?.rateLimits ?? this.t?.limits ?? null });
+        else {
+          const codex = limits?.rateLimits ?? this.t?.limits ?? null;
+          Object.assign(e, { codex });
+          const norm = normalizeRateLimits(codex);
+          if (norm) {
+            this.rateLimits = norm;
+            const key = `${kind}|${machineOf(this.term) ?? ""}`;
+            try { localStorage.setItem(`limits1:${key}`, JSON.stringify(norm)); } catch {}
+          }
+        }
         e.loading = false;
         return cx.notify();
       }
@@ -1217,7 +1393,15 @@ export default class Chat extends View {
       } else {
         const [u] = await control(folder, sessionOf(this.file), [{ subtype: "get_usage" }], { on: machineOf(this.term) });
         if (!u || u.error) e.error = u?.error ?? "No answer";
-        else Object.assign(e, { usage: u });
+        else {
+          Object.assign(e, { usage: u });
+          const norm = normalizeRateLimits(u.rate_limits);
+          if (norm) {
+            this.rateLimits = norm;
+            const key = `${kind}|${machineOf(this.term) ?? ""}`;
+            try { localStorage.setItem(`limits1:${key}`, JSON.stringify(norm)); } catch {}
+          }
+        }
       }
       e.loading = false;
       cx.notify();
@@ -1301,7 +1485,7 @@ export default class Chat extends View {
     this.panel = panel;
     cx.spawn(async (cx) => {
       while (this.panel === panel) {
-        await exec("sh", ["-c", "sleep 0.4"]);
+        await sleep(cx, 400);
         if (this.panel !== panel) break;
         const r = await hc(["read", this.term, "--lines", "40"]).catch(() => null);
         const screen = r?.stdout ?? "";
@@ -1326,6 +1510,21 @@ export default class Chat extends View {
     hc(["keys", this.term, ...keys]);
   }
 
+  submitCustomPrompt(text, cx) {
+    const P = this.panel;
+    const q = P?.q ?? (this.screen ? parsePrompt(this.screen) : null);
+    const customIdx = q?.options?.findIndex((o) => /^(?:type something|other)\b/i.test(o)) ?? -1;
+    cx.spawn(async (cx) => {
+      if (customIdx >= 0) {
+        this.panelKeys(...choose(q.selected, customIdx));
+        await sleep(cx, 80);
+      }
+      await hc(["send", this.term, text]);
+      if (!P) { this.screenSeq++; this.screen = this.idleAsk = null; }
+      cx.notify();
+    });
+  }
+
   // The panel over the message box.
   panelView(t) {
     const P = this.panel;
@@ -1343,6 +1542,7 @@ export default class Chat extends View {
     for (let i = end - 2; i > end - 30 && i > 0; i--) if (/^\s*[─━▔▁═]{8,}\s*$/.test(lines[i])) { top = i + 1; break; }
     const shown = lines.slice(top, end).filter((l, i, a) => l.trim() || (i > 0 && a[i - 1].trim()));
     const q = P.q;
+    const hasCustom = Boolean(q?.options?.some((o) => /^(?:type something|other)\b/i.test(o)));
     return h_flex().w_full().justify_center().child(v_flex().id("term-panel").w_full().max_w(900).p(12).gap(10).rounded(14)
       .border_1().border_color(t.accent).bg(t.popover).shadow_md()
       .child(h_flex().gap(8).items_center()
@@ -1356,8 +1556,27 @@ export default class Chat extends View {
           h_flex().id(`po-${n}`).px(12).py(7).gap(10).rounded(8).cursor_pointer().border_1()
             .border_color(n === q.selected ? t.accent : t.border).bg(n === q.selected ? t.selected : t.surface)
             .hover((s) => s.bg(t.hover)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-            .on_click((_e, cx) => { this.panelKeys(...choose(q.selected, n)); cx.notify(); })
-            .child(div().flex_1().text_size(12.5).child(o))))))
+            .on_click((_e, cx) => {
+              if (q.multi && q.boxes?.[n]) {
+                this.panelKeys(...toggleChoice(q.selected, n));
+                q.selected = n;
+                q.checked[n] = !q.checked[n];
+              } else {
+                this.panelKeys(...choose(q.selected, n));
+              }
+              cx.notify();
+            })
+            .when(Boolean(q.multi && q.boxes?.[n]), (row) => row.child(div().flex_none().text_size(13)
+              .text_color(q.checked?.[n] ? t.accent : t.dim).child(q.checked?.[n] ? "☑" : "☐")))
+            .child(div().flex_1().text_size(12.5).child(o)))))
+        .when(hasCustom && Boolean(this.promptInput), (row) => row.child(h_flex().gap(6).items_center()
+          .child(div().flex_1().child(Input.new(this.promptInput).text_size(12.5)))
+          .child(this.button("po-custom-send", "Send", (_e, cx) => {
+            const v = this.promptInput.value().trim();
+            if (!v) return;
+            this.promptInput.set_value("");
+            this.submitCustomPrompt(v, cx);
+          }, t)))))
       .when(!q && shown.length > 0, (el) => el.child(div().id("panel-screen").max_h(360).overflow_y_scrollbar().text_size(11.5).text_color(t.foreground)
         .when(Boolean(mono), (d) => d.font_family(mono))
         .child(this.markdown("panel-screen", "~~~~text\n" + shown.join("\n") + "\n~~~~"))))
@@ -1371,8 +1590,24 @@ export default class Chat extends View {
   setTerm(address, cx) {
     const nextId = localId(address);
     const changed = nextId !== this.terminalId;
+    if (changed && this.terminalId && this.input) {
+      this.drafts ??= {};
+      this.drafts[this.terminalId] = { text: this.input.value(), attach: [...(this.attach ?? [])] };
+    }
     this.terminalId = nextId;
-    if (changed) this.loadOutbox();
+    if (changed) {
+      const saved = (this.drafts ?? {})[nextId];
+      if (this.input) {
+        this.settingHistory = true;
+        this.input.set_value(saved?.text ?? "");
+        this.settingHistory = false;
+      }
+      this.attach = saved?.attach ? [...saved.attach] : [];
+      this.historyIdx = null;
+      this.historyDraft = "";
+      this.frozenStart = null;
+      this.loadOutbox();
+    }
     this.sig = null;
     this.file = null;
     this.t = null;
@@ -1443,12 +1678,12 @@ export default class Chat extends View {
       if (prevAddress !== undefined) this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
     }
     const kind = agentKind(term);
-    if (kind === "codex") {
+    if (kind === "codex" || kind === "claude") {
       if (this.pending?.length && ["working", "blocked"].includes(term?.status)) {
         for (const p of this.pending) if (!p.delivering) p.seenWorking = true;
       }
       if (this.tracer?.isEnabled()) {
-        const st = this.t?.codexTurn;
+        const st = this.t?.turnState ?? this.t?.codexTurn;
         const sig = `${term?.status ?? ""}|${st?.stage ?? ""}|${st?.epoch ?? 0}|${this.pending?.length ?? 0}|${Boolean(this.streamLoop)}|${Boolean(this.file)}`;
         this.tracer.record("check_state", {
           sig,
@@ -1472,8 +1707,9 @@ export default class Chat extends View {
     });
     if (seen) cx.spawn(async cx => { await seen; cx.notify(); });
     this.loadCmds(term, kind, cx);
+    this.loadUsageLimits(term, kind, cx);
     if (kind && term?.status === "working") {
-      if (kind === "codex") this.ensureFollow("codex", cx, 0);
+      if (kind === "codex" || kind === "claude") this.ensureFollow(kind, cx, 0);
       else if (!this.streamLoop) this.follow(kind, cx);
     }
     const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
@@ -1629,8 +1865,8 @@ export default class Chat extends View {
           this.grew = true;
           if (this.chatVisible()) this.cacheShown(cx);
           this.nameSpace();
-          if (state.kind === "codex") {
-            const st = this.t?.codexTurn;
+          if (state.kind === "codex" || state.kind === "claude") {
+            const st = this.t?.turnState ?? this.t?.codexTurn;
             this.tracer?.record("tail_batch", {
               count: lines.length,
               stage: st?.stage ?? null,
@@ -1639,7 +1875,7 @@ export default class Chat extends View {
               toolCount: st?.toolCount ?? 0,
             });
             if (st?.stage === "awaiting_text" && this.chatVisible()) {
-              this.ensureFollow("codex", cx, 1800);
+              this.ensureFollow(state.kind, cx, 1800);
             }
           }
           if (this.chatVisible()) cx.notify();
@@ -1681,6 +1917,7 @@ export default class Chat extends View {
       this.codexHandoff?.reset();
       this.limit = PAGE;
       this.off = 0;
+      this.frozenStart = null;
       this.historyBytes = 4 * 1024 * 1024;
       this.truncated = false;
     }
@@ -1717,13 +1954,13 @@ export default class Chat extends View {
         this.historyLoading = false;
         this.grew = true;
         if (this.chatVisible()) { this.cacheShown(cx); cx.notify(); }
-        if (!previous && kind === "codex" && this.term && this.terminal()?.status !== "working" && !this.codexHandoff?.seeded) {
+        if (!previous && (kind === "codex" || kind === "claude") && this.term && this.terminal()?.status !== "working" && !this.codexHandoff?.seeded) {
           const term = this.term;
           cx.spawn(async () => {
             try {
               const r = await hc(["read", term, "--lines", "80"]);
               if (gen !== this.gen || this.term !== term || this.terminal()?.status === "working" || this.codexHandoff?.seeded) return;
-              if (r?.stdout != null) this.codexHandoff?.seedIdleScreen(liveSnapshot(r.stdout, "codex"));
+              if (r?.stdout != null) this.codexHandoff?.seedIdleScreen(liveSnapshot(r.stdout, kind));
             } catch {}
           });
         }
@@ -1930,7 +2167,7 @@ export default class Chat extends View {
     const status = this.terminal()?.status;
     const busy = ["working", "blocked"].includes(status);
     const draining = Boolean(this.codexHandoff?.draining || this.streamLoop?.exiting);
-    const codex = (this.t?.kind ?? agentKind(this.terminal())) === "codex";
+    const managed = ["codex", "claude"].includes(this.t?.kind ?? agentKind(this.terminal()));
     const now = Date.now();
     for (const p of this.pending) {
       if (!p.delivering && busy) {
@@ -1940,8 +2177,9 @@ export default class Chat extends View {
         p.idleSince ??= now;
       }
     }
-    const turnEpoch = this.t?.codexTurn?.epoch ?? 0;
-    const completed = codex && this.t?.codexTurn?.stage === "completed";
+    const turn = this.t?.turnState ?? this.t?.codexTurn;
+    const turnEpoch = turn?.epoch ?? 0;
+    const completed = managed && turn?.stage === "completed";
     this.pending = this.pending.filter((p) => {
       if (draining && !p.delivering) return true;
       if (!p.delivering && !busy && completed && p.seenWorking && turnEpoch >= (p.minCompletedEpoch ?? 1)) return false;
@@ -2026,7 +2264,13 @@ export default class Chat extends View {
       this.matches = ents.length;
       return { start: Math.max(0, ents.length - 200), ents };
     }
-    return { start: Math.max(0, ents.length - this.limit), ents };
+    let start = Math.max(0, ents.length - this.limit);
+    if (this.off > 24 && !this.earlier && this.frozenStart != null) {
+      start = Math.min(this.frozenStart, Math.max(0, ents.length - 1));
+    } else {
+      this.frozenStart = start;
+    }
+    return { start, ents };
   }
 
   openSearch(cx) {
@@ -2465,6 +2709,7 @@ export default class Chat extends View {
         .child(this.reply(e, t))
         .when(nextKind !== "tools" && nextKind !== "changes", row => row.child(this.replyCopy(e, t)));
     }
+    if (e.kind === "thinking") return this.thinkingView(e, t, last);
     if (e.kind === "notice") {
       const at = new Date(e.timestamp);
       const time = Number.isFinite(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : null;
@@ -2492,6 +2737,20 @@ export default class Chat extends View {
   replyCopy(e, t) {
     return h_flex().h(18).gap(4).when(this.hovered === e.key && e.key !== "streaming", (el) => el
       .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t).size(18)));
+  }
+
+  thinkingView(e, t, last) {
+    const id = `think-${e.key}`, open = this.open.has(id);
+    const working = last && this.terminal()?.status === "working";
+    return v_flex().w_full().min_w(0)
+      .child(h_flex().id(id).px(4).py(3).gap(8).items_center().cursor_pointer().text_color(t.dim)
+        .hover(s => s.text_color(t.muted))
+        .on_click((_e, cx) => this.toggleCard(id, cx, open))
+        .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none())
+        .child(div().flex_none().text_size(12).child(working ? "Thinking…" : "Thought process"))
+        .when(!open, el => el.child(div().flex_1().min_w(0).truncate().text_size(12).child(summaryLine(e.text)))))
+      .when(open, el => el.child(div().mt(4).pl(12).border_l(2).border_color(t.border).text_size(12.5).line_height("20px").text_color(t.muted)
+        .child(this.markdown(`think-md-${e.key}`, e.text))));
   }
 
   // Render terminal output as selectable literal text, without Markdown's
@@ -2681,11 +2940,12 @@ export default class Chat extends View {
     });
     const colors = {added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
     const escape = text => text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const lines = diffLines(file), groups = diffGroups(lines);
     const content = v_flex().w(geometry.width).max_h(geometry.height).rounded(10).border_1().border_color(t.input).bg(t.popover).shadow_lg().overflow_hidden()
       .on_scroll_wheel((_event,cx) => cx.stop_propagation())
       .child(div().h(36).flex_none().px(12).flex().items_center().text_size(12).font_semibold().child(file.path.split(/[\\/]/).at(-1)))
-      .child(v_flex().id(`hover-scroll-${id}`).h(Math.min(Math.max(64,geometry.height-38),Math.max(80,diffLines(file).length*18+16))).flex_none().overflow_y_scrollbar().py(8)
-        .children(diffGroups(diffLines(file)).map((group,index) => div().px(10).w_full().min_w(0).flex_none()
+      .child(v_flex().id(`hover-scroll-${id}`).h(Math.min(Math.max(64,geometry.height-38),Math.max(80,lines.length*18+16))).flex_none().overflow_y_scrollbar().py(8)
+        .children(groups.map((group,index) => div().px(10).w_full().min_w(0).flex_none()
           .child(TextView.html(`hover-diff-${id}-${index}`,`<pre>${escape(group.text)}</pre>`).selectable(true).text_size(12).line_height("18px").text_color(colors[group.kind])
             .when(Boolean(settings().font_family),el=>el.font_family(settings().font_family))))));
     return HoverCard.new(`diff-hover-${id}`).w_auto().self_start().flex_none()
@@ -2750,16 +3010,34 @@ export default class Chat extends View {
           : running ? "Running…" : pendingOutput ? "Output pending" : item.result === null ? "Pending" : "✓ Success"));
   }
 
+  planView(id, i, t) {
+    return v_flex().id(`${id}-plan`).w_full().min_w(0).mt(6).px(12).py(10).gap(6).rounded(12).border(0.5).border_color(t.input).bg(t.surface)
+      .when(Boolean(i.planExplanation), el => el.child(div().text_size(12).text_color(t.muted).child(i.planExplanation)))
+      .children(i.todos.map(todo => {
+        const done = todo.status === "completed";
+        const active = todo.status === "in_progress";
+        return h_flex().gap(8).items_center().text_size(12.5)
+          .child(div().flex_none().w(14).text_color(done ? t.done : active ? t.accent : t.dim)
+            .child(done ? "✓" : active ? "▸" : "○"))
+          .child(div().flex_1().min_w(0)
+            .when(done, d => d.text_color(t.dim).line_through())
+            .when(active, d => d.font_medium().text_color(t.foreground))
+            .when(!done && !active, d => d.text_color(t.muted))
+            .child(active && todo.activeForm ? todo.activeForm : todo.text));
+      }));
+  }
+
   tool(key, n, i, t) {
     i = i.changes ? i : toolDetails(i);
     const id = `tool-${key}-${n}`, open = this.open.has(id);
     const running = i.result === null && this.terminal()?.status === "working";
+    const isPlan = i.name === "Plan" && Boolean(i.todos?.length);
     return v_flex().w_full().min_w(0)
       .when(i.error, el => el.rounded(8).border_1().border_color(t.blocked))
       .child(h_flex().id(id).px(4).py(3).gap(8).items_center().cursor_pointer().text_color(t.muted)
         .hover(style => i.name === "Bash" ? style.text_color(t.foreground) : style.bg(t.hover))
         .on_click((_event, cx) => { this.toggleCard(id, cx, open); })
-        .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none())
+        .child(svg(`mods/chat/icons/${i.name === "Edit" ? "edit" : i.name === "Bash" || i.name === "Wait" ? "terminal" : i.name === "Plan" ? "scroll" : /search|grep|glob/i.test(i.name) ? "search" : "plug"}.svg`).size(14).flex_none())
         .child(div().flex_none().text_size(12.5).child(i.name === "Edit" ? i.error ? "Edit failed" : i.result === null ? "Editing" : "Edited" : i.name === "Bash" ? i.error ? "Command failed" : i.result === null ? "Running" : "Ran" : i.name))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).child(i.name === "Bash" ? commandPreview(i.displayInput ?? i.summary) : summaryLine(i.summary)))
         .when(i.changes?.length === 1 && i.changes[0].added != null && !i.error, el => el
@@ -2768,9 +3046,10 @@ export default class Chat extends View {
         .when(running, el => el.child(div().text_size(12).text_color(t.dim).frames(SPINNER, 90)))
         .when(!running && (i.error || i.result === null), el => el.child(div().text_size(11).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : "Pending")))
         .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none()))
+      .when(open && isPlan, el => el.child(this.planView(id, i, t)))
       .when(open && i.name === "Bash", el => el.child(this.shellDetails(id, i, t, running)))
-      .when(open && i.name !== "Bash", el => el.child(v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8)
-        .rounded(12).border(0.5).border_color(i.error ? t.blocked : t.input)
+      .when(open && !isPlan && i.name !== "Bash", el => el.child(v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8)
+        .rounded(12).border(0.5).border_color(i.error ? t.blocked : t.input).bg(t.surface)
         .when(i.input != null, row => row.child(v_flex().gap(4)
           .child(div().text_size(11).text_color(t.dim).child("Input"))
           .child(this.plainOutput(`${id}-input`, typeof i.displayInput === "string" ? i.displayInput
@@ -2778,15 +3057,9 @@ export default class Chat extends View {
         .when(Boolean(i.result?.trim()), row => row.child(v_flex().gap(4)
           .child(div().text_size(11).text_color(t.dim).child("Output"))
           .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
-        .when(i.displayInput !== i.input, row => row.child(v_flex().gap(4)
-          .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
-            this.toggleCard(`raw-${id}`, cx);
-          }, t).w_auto().self_start().bg(t.background).text_color(t.dim).px(0).py(2))
-          .when(this.open.has(`raw-${id}`), details => details.child(this.plainOutput(`${id}-raw`,
-            typeof i.input === "string" ? i.input : JSON.stringify(i.input, null, 2), t, false, false)))))
         .when(i.images.length > 0, row => row.child(h_flex().flex_wrap().gap(6)
           .children(i.images.map(image => this.img(image.ref, t, 420, 300)))))))
-      .when(i.name === "Bash" && open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
+      .when(open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
         .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
           this.toggleCard(`raw-${id}`, cx);
         }, t).w_auto().self_start().bg(t.background).text_color(t.dim).px(0).py(2))
@@ -2956,18 +3229,17 @@ export default class Chat extends View {
     }
     const rendered = withPending(shown, this.pending);
     const lastRendered = rendered.at(-1);
-    const streamMt = !lastRendered ? 0 : ["assistant", "tools"].includes(lastRendered.kind) ? 8 : 18;
+    const streamMt = !lastRendered ? 0 : ["assistant", "tools", "thinking"].includes(lastRendered.kind) ? 8 : 18;
     const runMt = streamText ? 8 : streamMt;
-    const anchorCard = this.anchorCard;
-    this.anchorCard = false;
     // The conversation sits in a centered column as wide as the message card.
     const side = Math.max(18, Math.round((this.width - 900) / 2) + 16);
     const content = v_flex().id("content").absolute().left(0).right(0).top(this.contentH > 0 ? this.viewH - this.contentH + this.off : 0).px(side).py(24).gap(0)
       .on_size_change((size, cx) => {
-        if (size.height === this.contentH) return;
+        if (size.height === this.contentH) { this.anchorCard = false; return; }
         // Position from the measured top, not the new bottom: height changes
         // must not move the whole page for a frame before this correction.
-        if ((this.off > 0 || anchorCard) && this.contentH > 0 && !this.earlier) this.off += size.height - this.contentH;
+        if ((this.off > 0 || this.anchorCard) && this.contentH > 0 && !this.earlier) this.off += size.height - this.contentH;
+        this.anchorCard = false;
         this.earlier = false;
         this.grew = false;
         this.contentH = size.height;
@@ -2984,7 +3256,7 @@ export default class Chat extends View {
           .child(this.historyLoading ? "Loading earlier history…" : "Load earlier history"))))
       .children(rendered.map((entry, index, entries) => {
         const previous = entries[index - 1];
-        const tight = previous && ((["assistant", "tools"].includes(previous.kind) && ["assistant", "tools"].includes(entry.kind)) || entry.kind === "changes");
+        const tight = previous && ((["assistant", "tools", "thinking"].includes(previous.kind) && ["assistant", "tools", "thinking"].includes(entry.kind)) || entry.kind === "changes");
         const completed = entry.kind === "notice" && entry.event === "completed";
         const copyReply = copyAtChange.get(entry.key);
         return v_flex().w_full().mt(index ? completed ? 0 : tight ? 8 : 18 : 0).child(entry.kind === "pending"
@@ -3033,6 +3305,19 @@ export default class Chat extends View {
         .when(asking, (el) => el.child(div().w_full().max_w(720)
           .child(this.promptBox("The agent is asking:", t)))));
     }
+    const panel = typeof this.panelView === "function" ? this.panelView(t) : null;
+    const slash = typeof this.slash === "function" ? this.slash() : null;
+    const emoji = !panel && !slash && typeof this.emojiMenu === "function" ? this.emojiMenu() : null;
+    const mention = !panel && !slash && !emoji && typeof this.mentionMenu === "function" ? this.mentionMenu() : null;
+    const overlay = panel ?? (slash ? h_flex().w_full().justify_center().child(this.commandMenu(t))
+      : emoji ? h_flex().w_full().justify_center().child(this.emojiView(t))
+      : mention ? h_flex().w_full().justify_center().child(this.mentionView(t))
+      : null);
+    if (overlay) {
+      scroll.child(div().absolute().left(16).right(16).bottom(8)
+        .on_scroll_wheel((_e, cx) => cx.stop_propagation())
+        .child(overlay));
+    }
     return scroll;
   }
 
@@ -3041,6 +3326,7 @@ export default class Chat extends View {
   promptBox(title, t) {
     const form = this.idleAsk === "form";
     const q = form ? null : parsePrompt(this.screen);
+    const hasCustom = Boolean(q?.options?.some((o) => /^(?:type something|other)\b/i.test(o)));
     const key = (k, label) => this.button(`key-${k}`, label, () => hc(["keys", this.term, k]), t);
     const mono = settings().font_family;
     const lines = (this.screen ?? "").split("\n").filter((l, i, a) => l.trim() || (i > 0 && a[i - 1].trim()));
@@ -3053,9 +3339,28 @@ export default class Chat extends View {
         h_flex().id(`choice-${n}`).px(12).py(8).gap(10).rounded(8).cursor_pointer().border_1()
           .border_color(n === q.selected ? t.accent : t.border).bg(n === q.selected ? t.selected : t.surface)
           .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { hc(["keys", this.term, ...choose(q.selected, n)]); this.screenSeq++; this.screen = this.idleAsk = null; cx.notify(); })
-          .child(div().flex_none().w(16).text_color(t.dim).child(String(n + 1)))
-          .child(div().flex_1().text_size(12.5).child(o))))))
+          .on_click((_e, cx) => {
+            if (q.multi && q.boxes?.[n]) {
+              hc(["keys", this.term, ...toggleChoice(q.selected, n)]);
+              q.selected = n;
+              q.checked[n] = !q.checked[n];
+            } else {
+              hc(["keys", this.term, ...choose(q.selected, n)]);
+              this.screenSeq++; this.screen = this.idleAsk = null;
+            }
+            cx.notify();
+          })
+          .child(div().flex_none().w(16).text_color(q.multi && q.boxes?.[n] && q.checked?.[n] ? t.accent : t.dim)
+            .child(q.multi && q.boxes?.[n] ? (q.checked?.[n] ? "☑" : "☐") : String(n + 1)))
+          .child(div().flex_1().text_size(12.5).child(o)))))
+        .when(hasCustom && Boolean(this.promptInput), (row) => row.child(h_flex().gap(6).items_center()
+          .child(div().flex_1().child(Input.new(this.promptInput).text_size(12.5)))
+          .child(this.button("choice-custom-send", "Send", (_e, cx) => {
+            const v = this.promptInput.value().trim();
+            if (!v) return;
+            this.promptInput.set_value("");
+            this.submitCustomPrompt(v, cx);
+          }, t)))))
       .when(!q && lines.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.muted)
         .when(Boolean(mono), (d) => d.font_family(mono))
         .child(this.markdown("screen", "~~~~text\n" + lines.slice(-24).join("\n") + "\n~~~~"))))
@@ -3063,7 +3368,41 @@ export default class Chat extends View {
         .when(!q, (el) => el.child(key("up", "↑")).child(key("down", "↓"))
           .when(form, (el) => el.child(key("left", "←")).child(key("right", "→")))
           .child(key("enter", "Enter")))
+        .when(Boolean(q?.multi), (el) => el.child(key("space", "Toggle")).child(key("enter", "Submit")))
         .child(key("esc", "Esc")));
+  }
+
+  contextBadge(t) {
+    const limits = normalizeRateLimits(this.t?.limits) ?? normalizeRateLimits(this.rateLimits);
+    if (!limits) return null;
+    const resetText = (at) => {
+      if (!at) return "";
+      const ms = typeof at === "number" ? at * (at < 1e12 ? 1000 : 1) : Date.parse(at);
+      return Number.isFinite(ms) ? ` · resets ${new Date(ms).toLocaleString()}` : "";
+    };
+    const ringColor = (pct, normal) => pct >= 90 ? t.blocked : pct >= 75 ? t.working : normal;
+    const badge = (id, pct, normal, tip, onClick) => {
+      const color = ringColor(pct, normal);
+      return h_flex().id(id).px(3).py(3).items_center().rounded(6)
+        .cursor_pointer().hover((s) => s.bg(t.hover))
+        .tooltip(tip)
+        .on_click(onClick)
+        .child(ringIcon(pct, color, t.border));
+    };
+    const items = [];
+    if (limits.fiveHour) {
+      const { pct, resetsAt } = limits.fiveHour;
+      items.push(badge("limit-5h-badge", pct, t.accent,
+        `5h limit: ${pct}% used${resetText(resetsAt)}`,
+        (_e, cx) => this.hostCard("usage", cx)));
+    }
+    if (limits.sevenDay) {
+      const { pct, resetsAt } = limits.sevenDay;
+      items.push(badge("limit-7d-badge", pct, t.muted,
+        `7d limit: ${pct}% used${resetText(resetsAt)}`,
+        (_e, cx) => this.hostCard("usage", cx)));
+    }
+    return items.length ? h_flex().id("usage-badges").gap(2).items_center().children(items) : null;
   }
 
   // The message box: one card with the text on top and its controls under it.
@@ -3076,6 +3415,8 @@ export default class Chat extends View {
     // A command chosen from the menu: what it takes, under the message box.
     const chosen = !this.dialog && !this.slash() && this.input.content().tokens.length > 0 ? this.typedCommand() : null;
     const stop = working && !typed && !this.dialog;
+    const ctxBadge = !this.dialog ? this.contextBadge(t) : null;
+    const showWorkingRow = working && (!this.running || inlineQueue || (term.report?.msg && term.report.msg !== this.running.title));
     const icon = (id, text, action, on) => div().id(id).flex_none().size(30).rounded_full().flex().items_center().justify_center()
       .cursor_pointer().text_size(16).text_color(t.muted).when(Boolean(on), (el) => el.bg(t.hover))
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
@@ -3106,6 +3447,7 @@ export default class Chat extends View {
         .child(icon("attach", svg("mods/chat/icons/attachment.svg").size(14), (_e, cx) => this.pickFiles(cx)).size(26).tooltip("Attach files"))
         .child(div().flex_1())
         .when(!this.dialog && Boolean(this.term), (el) => el.child(this.modeMenu(term, t)).child(this.modelMenu(term, t)))
+        .when(Boolean(ctxBadge), (el) => el.child(ctxBadge))
         .child(div().id("send").flex_none().size(28).rounded_full().flex().items_center().justify_center().cursor_pointer()
           .text_size(stop ? 12 : 16).font_semibold()
           .bg(stop ? t.accent : typed || this.dialog ? t.solid : t.raised)
@@ -3120,7 +3462,7 @@ export default class Chat extends View {
           .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked)
             .tooltip(this.t.issue.message).child("Usage limit reached · queued messages are paused"))
           .child(this.button("usage-terminal", "Show TUI", (_e, cx) => this.showTerminal(cx), t)))))
-      .when(working, (el) => el.child(h_flex().w_full().justify_center().child(h_flex().w_full().max_w(900).px(6).gap(8).items_center().text_size(12).text_color(t.muted)
+      .when(showWorkingRow, (el) => el.child(h_flex().w_full().justify_center().child(h_flex().w_full().max_w(900).px(6).gap(8).items_center().text_size(12).text_color(t.muted)
         .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
         .child(div().flex_1().min_w(0).truncate().child(term.report?.msg || "Working…"))
         .when(inlineQueue, row => row.child(this.outboxView(t, true))))))
@@ -3128,10 +3470,6 @@ export default class Chat extends View {
         .child(div().w_full().max_w(900).child(this.promptBox("The agent is asking:", t)))))
       .when(Boolean(this.error), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().w_full().max_w(900).px(6).text_size(11.5).text_color(t.blocked).child(this.error))))
-      .when(Boolean(this.panelView(t)), (el) => el.child(this.panelView(t)))
-      .when(Boolean(this.slash()), (el) => el.child(h_flex().w_full().justify_center().child(this.commandMenu(t))))
-      .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.emojiView(t))))
-      .when(!this.slash() && Boolean(this.mentionMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.mentionView(t))))
       .when(!this.dialog && this.outbox.failedItems.length > 0, el => el.child(this.failedSendsView(t)))
       .when(!this.dialog && this.outbox.visibleItems.length > 0 && !inlineQueue, el => el.child(this.outboxView(t)))
       .child(h_flex().w_full().justify_center().child(card));

@@ -19,7 +19,9 @@ export function menuAtBottom(screen) {
   return hint ? (/←|→|to change/.test(hint) ? "form" : "menu") : null;
 }
 
-// { question, options: [text], selected } or null when the screen has no menu.
+const CHECKBOX = /^(?:\[([ xX✓✔])\]|(☐|☑))\s+/;
+
+// { question, options: [text], selected, multi?, checked?, boxes? } or null when the screen has no menu.
 export function parsePrompt(screen) {
   // A ✔ marks the current choice; read it as an indent, so its line lines up.
   const current = new Set();
@@ -43,12 +45,25 @@ export function parsePrompt(screen) {
   let last = at;
   while (last + 1 < lines.length && (isOption(lines[last + 1]) || continues(lines[last + 1]))) last++;
   const options = [];
+  const checked = [];
+  const boxes = [];
+  let hasCheckbox = false;
   let selected = 0;
   for (let i = first; i <= last; i++) {
     const l = lines[i];
-    const text = l.replace(MARKER, "").replace(NUMBER, "").trim();
+    let text = l.replace(MARKER, "").replace(NUMBER, "").trim();
     if (!isOption(l)) { options[options.length - 1] += " " + text; continue; }
     if (i === at) selected = options.length;
+    const box = CHECKBOX.exec(text);
+    if (box) {
+      hasCheckbox = true;
+      boxes.push(true);
+      checked.push(box[2] === "☑" || /[xX✓✔]/.test(box[1] ?? ""));
+      text = text.slice(box[0].length).trim();
+    } else {
+      boxes.push(false);
+      checked.push(false);
+    }
     options.push(current.has(i) ? `${text} ✓` : text);
   }
   if (options.length < 2) return null;
@@ -59,7 +74,9 @@ export function parsePrompt(screen) {
   const banner = lines.slice(top, first).findIndex(line => /^\s*Approaching rate limits\b/i.test(line));
   if (banner >= 0) top += banner;
   const question = reflow(lines.slice(top, first));
-  return { question, options, selected };
+  return hasCheckbox
+    ? { question, options, selected, multi: true, checked, boxes }
+    : { question, options, selected };
 }
 
 // Terminal-wrapped text as paragraphs.
@@ -72,4 +89,10 @@ export function reflow(lines) {
 export function choose(from, to) {
   const keys = Array(Math.abs(to - from)).fill(to > from ? "down" : "up");
   return [...keys, "enter"];
+}
+
+// The keys that move the selection from `from` to `to` and toggle a checkbox.
+export function toggleChoice(from, to) {
+  const keys = Array(Math.abs(to - from)).fill(to > from ? "down" : "up");
+  return [...keys, "space"];
 }

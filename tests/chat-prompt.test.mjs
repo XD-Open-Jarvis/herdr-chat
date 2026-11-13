@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 const source=readFileSync(new URL('../mods/chat/prompt.js',import.meta.url),'utf8');
-const {menuAtBottom,parsePrompt,choose}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {menuAtBottom,parsePrompt,choose,toggleChoice}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 const screen=`Previous assistant response
 Worked for 10m
 
@@ -24,4 +24,17 @@ test('both old and new menu legends remain supported without treating normal TUI
  assert.equal(menuAtBottom(screen.replace('enter select · esc back','Enter to select · Esc to cancel')),'menu');
  assert.equal(menuAtBottom('› Ask anything\nWorking · esc to interrupt\n← for agents · ? for shortcuts'),null);
  assert.equal(menuAtBottom('↑/↓ to navigate · Enter to confirm'),'menu');
+});
+test('multi-select checkbox prompts expose checked flags and toggleChoice sends space',()=>{
+ const multi=`Pick features to enable
+❯ 1. [x] Fast mode
+  2. [ ] Audit logging
+  3. Type something else
+  Enter to confirm · Space to toggle`;
+ const q=parsePrompt(multi);
+ assert.equal(q.multi,true);
+ assert.deepEqual(q.checked,[true,false,false]);
+ assert.deepEqual(q.boxes,[true,true,false]);
+ assert.deepEqual(q.options,['Fast mode','Audit logging','Type something else']);
+ assert.deepEqual(toggleChoice(0,1),['down','space']);
 });

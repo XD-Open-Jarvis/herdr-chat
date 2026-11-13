@@ -1536,3 +1536,247 @@ test("Delayed watchFolder after completed Turn 1 + >15s Turn 2 + workedAfterAt +
   assert.equal(snapshots.at(-1).pending, 0);
   assert.equal(snapshots.at(-1).stream, null);
 });
+
+test("Claude Code parity: Transcript.turnState + thinking, liveSnapshot(claude) status/worked, and handoff without duplicate", () => {
+  const t = new Transcript("claude");
+  assert.equal(t.codexTurn, undefined);
+  assert.deepEqual(t.turnState, {
+    epoch: 0,
+    turnId: null,
+    stage: "idle",
+    turnStarted: false,
+    userCount: 0,
+    assistantCount: 0,
+    toolCount: 0,
+    lastAssistantKey: null,
+  });
+
+  t.feed(JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "Check bug" }] } }));
+  assert.equal(t.turnState.epoch, 1);
+  assert.equal(t.turnState.stage, "awaiting_text");
+
+  t.feed(JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "thinking", thinking: "Inspecting parser state" },
+        { type: "text", text: "Checking now." },
+        { type: "tool_use", id: "tu-1", name: "Read", input: { file_path: "a.js" } },
+      ],
+    },
+  }));
+  assert.equal(t.entries.some((e) => e.kind === "thinking" && e.text === "Inspecting parser state"), true);
+  assert.equal(t.turnState.assistantCount, 1);
+  assert.equal(t.turnState.toolCount, 1);
+  assert.equal(t.turnState.stage, "awaiting_text");
+
+  const workingScreen = [
+    "❯ Check bug",
+    "",
+    "⏺ Streaming Claude reply",
+    "",
+    "✻ Thinking… (esc to interrupt)",
+    "────────────",
+    "❯ ",
+  ].join("\n");
+  const snapWorking = liveSnapshot(workingScreen, "claude");
+  assert.equal(snapWorking.item?.kind, "text");
+  assert.equal(snapWorking.item?.text, "Streaming Claude reply");
+  assert.equal(snapWorking.statusAfterAt, true);
+  assert.equal(snapWorking.workedAfterAt, false);
+
+  const handoff = new CodexHandoff();
+  handoff.noteUserSend(t.turnState);
+  let res = handoff.update(snapWorking, { codexTurn: t.turnState, pendingCount: 1, termStatus: "working", hasPriorAssistant: false });
+  assert.equal(res.streamText, "Streaming Claude reply");
+
+  const doneScreen = [
+    "❯ Check bug",
+    "",
+    "⏺ Streaming Claude reply",
+    "",
+    "✻ Worked for 4s",
+    "────────────",
+    "❯ ",
+  ].join("\n");
+  const snapDone = liveSnapshot(doneScreen, "claude");
+  assert.equal(snapDone.workedAfterAt, true);
+  assert.equal(snapDone.statusAfterAt, false);
+
+  t.feed(JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "Streaming Claude reply" }] },
+  }));
+  t.feed(JSON.stringify({ type: "system", subtype: "turn_duration", durationMs: 4000, uuid: "d-1" }));
+  assert.equal(t.turnState.stage, "completed");
+
+  res = handoff.update(snapDone, { codexTurn: t.turnState, pendingCount: 0, termStatus: "idle", hasPriorAssistant: true });
+  assert.equal(res.shouldDrainBeforeDrop, true);
+  handoff.beginDrain();
+  handoff.endDrain({ keepRun: true });
+  res = handoff.update(snapDone, { codexTurn: t.turnState, pendingCount: 0, termStatus: "idle", hasPriorAssistant: true });
+  assert.equal(res.streamText, null);
+});
+
+test("setTerm preserves per-terminal drafts and menuKey navigates single-line input history", () => {
+  const { Chat } = makeChatClass({ agentKind: () => "claude" });
+  let notifyCount = 0;
+  let value = "";
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    terminalId: "t1",
+    drafts: {},
+    historyIdx: null,
+    historyDraft: "",
+    attach: [{ name: "a.png", path: "/tmp/a.png" }],
+    input: {
+      value: () => value,
+      set_value: (v) => { value = v; },
+    },
+    t: {
+      entries: [
+        { kind: "user", text: "first prompt" },
+        { kind: "user", text: "/status", command: true },
+        { kind: "user", text: "second prompt" },
+        { kind: "user", text: "second prompt" },
+      ],
+    },
+    slash: () => null,
+    emojiMenu: () => null,
+    mentionMenu: () => null,
+    panelLive: () => false,
+    loadOutbox() {},
+    check() {},
+  });
+  value = "draft for t1";
+  const cx = { notify() { notifyCount++; }, stop_propagation() {} };
+
+  chat.setTerm("t2", cx);
+  assert.equal(value, "");
+  assert.equal(chat.attach.length, 0);
+  value = "wip t2";
+  chat.setTerm("t1", cx);
+  assert.equal(value, "draft for t1");
+  assert.equal(chat.attach.length, 1);
+
+  chat.t = {
+    entries: [
+      { kind: "user", text: "first prompt" },
+      { kind: "user", text: "/status", command: true },
+      { kind: "user", text: "second prompt" },
+      { kind: "user", text: "second prompt" },
+    ],
+  };
+  chat.menuKey({ keystroke: "up" }, cx);
+  assert.equal(value, "second prompt");
+  chat.menuKey({ keystroke: "up" }, cx);
+  assert.equal(value, "first prompt");
+  chat.menuKey({ keystroke: "down" }, cx);
+  assert.equal(value, "second prompt");
+  chat.menuKey({ keystroke: "down" }, cx);
+  assert.equal(value, "draft for t1");
+  assert.ok(notifyCount > 0);
+});
+
+test("Claude default context window, Codex rate limits, and contextBadge rings for Context, 5h, and 7d", () => {
+  const ct = new Transcript("claude");
+  ct.feed(JSON.stringify({
+    type: "assistant",
+    uuid: "a1",
+    message: {
+      id: "m1",
+      model: "claude-sonnet-4-6",
+      usage: { input_tokens: 10000, cache_read_input_tokens: 20000, cache_creation_input_tokens: 5000, output_tokens: 5000 },
+      content: [{ type: "text", text: "ok" }],
+    },
+  }));
+  assert.deepEqual(ct.context, { used: 40000, window: 200000 });
+
+  const ct1m = new Transcript("claude");
+  ct1m.feed(JSON.stringify({
+    type: "assistant",
+    uuid: "a2",
+    message: {
+      id: "m2",
+      model: "claude-opus-4-6[1m]",
+      usage: { input_tokens: 50000, output_tokens: 50000 },
+      content: [{ type: "text", text: "ok" }],
+    },
+  }));
+  assert.deepEqual(ct1m.context, { used: 100000, window: 1000000 });
+
+  const xt = new Transcript("codex");
+  xt.feed(JSON.stringify({
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: { last_token_usage: { total_tokens: 60000 }, model_context_window: 200000 },
+      rate_limits: { primary: { used_percent: 42, resets_at: 1800000000 }, secondary: { used_percent: 80, resets_at: 1800500000 } },
+    },
+  }));
+  assert.equal(xt.limits.primary.used_percent, 42);
+  assert.equal(xt.limits.secondary.used_percent, 80);
+
+  const builtPaths = [];
+  const makeEl = (tag) => {
+    const el = {
+      tag,
+      idValue: null,
+      childrenList: [],
+      tips: [],
+      id(v) { el.idValue = v; return el; },
+      px() { return el; }, py() { return el; }, gap() { return el; }, items_center() { return el; },
+      rounded() { return el; }, text_size() { return el; }, text_color() { return el; },
+      cursor_pointer() { return el; }, hover() { return el; }, tooltip(v) { el.tips.push(v); return el; },
+      on_click() { return el; }, relative() { return el; }, size() { return el; }, flex_none() { return el; },
+      absolute() { return el; }, inset_0() { return el; }, rounded_full() { return el; }, border_1() { return el; }, border_color() { return el; },
+      when(cond, fn) { if (cond) fn(el); return el; },
+      child(c) { el.childrenList.push(c); return el; },
+      children(cs) { el.childrenList.push(...cs); return el; },
+    };
+    return el;
+  };
+  const makePathBuilder = () => {
+    const ops = [];
+    const b = {
+      move_to(x, y) { ops.push(["move_to", x, y]); return b; },
+      arc_to(rx, ry, rot, large, sweep, x, y) { ops.push(["arc_to", rx, ry, rot, large, sweep, x, y]); return b; },
+      build() { const p = { ops }; builtPaths.push(p); return p; },
+    };
+    return b;
+  };
+  const { Chat } = makeChatClass({
+    div: () => makeEl("div"),
+    h_flex: () => makeEl("h_flex"),
+    PathBuilder: { stroke: () => makePathBuilder() },
+    window: { paint_path: (path, color) => ({ ...makeEl("path"), path, color }) },
+  });
+  const theme = { accent: "#3b82f6", working: "#f59e0b", blocked: "#ef4444", muted: "#94a3b8", dim: "#64748b", border: "#334155", hover: "#1e293b", foreground: "#f8fafc" };
+
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    t: xt,
+    rateLimits: null,
+  });
+  const badges = chat.contextBadge(theme);
+  assert.equal(badges.idValue, "usage-badges");
+  assert.deepEqual(badges.childrenList.map((c) => c.idValue), ["limit-5h-badge", "limit-7d-badge"]);
+  assert.equal(badges.childrenList[0].childrenList.length, 1);
+  assert.equal(badges.childrenList[1].childrenList.length, 1);
+  assert.match(badges.childrenList[0].tips[0], /^5h limit: 42% used/);
+  assert.match(badges.childrenList[1].tips[0], /^7d limit: 80% used/);
+  assert.ok(builtPaths.length >= 3);
+
+  const claudeNoLimits = Object.assign(Object.create(Chat.prototype), {
+    t: ct,
+    rateLimits: null,
+  });
+  assert.equal(claudeNoLimits.contextBadge(theme), null);
+
+  const claudeChat = Object.assign(Object.create(Chat.prototype), {
+    t: ct,
+    rateLimits: { five_hour: { utilization: 18.4, resets_at: "2026-11-13T12:00:00Z" }, seven_day: { utilization: 92, resets_at: "2026-11-18T00:00:00Z" } },
+  });
+  const cBadges = claudeChat.contextBadge(theme);
+  assert.deepEqual(cBadges.childrenList.map((c) => c.idValue), ["limit-5h-badge", "limit-7d-badge"]);
+  assert.match(cBadges.childrenList[0].tips[0], /^5h limit: 18% used/);
+  assert.match(cBadges.childrenList[1].tips[0], /^7d limit: 92% used/);
+});

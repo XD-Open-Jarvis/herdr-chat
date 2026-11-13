@@ -158,8 +158,8 @@ export class Transcript {
     // Tokens the session used, per model, from its replies (each counted once).
     this.tokens = {};
     this.counted = new Map();
-    if (this.kind === "codex") {
-      this.codexTurn = {
+    if (this.kind === "codex" || this.kind === "claude") {
+      this.turnState = {
         epoch: 0,
         turnId: null,
         stage: "idle",
@@ -169,6 +169,7 @@ export class Transcript {
         toolCount: 0,
         lastAssistantKey: null,
       };
+      if (this.kind === "codex") this.codexTurn = this.turnState;
     }
   }
 
@@ -220,7 +221,10 @@ export class Transcript {
     if (bash) text = "! " + bash[1];
     const stdout = /<bash-stdout>([\s\S]*?)<\/bash-stdout>/.exec(text);
     if (stdout) return this.note(stripAnsi(stdout[1]).trim().split("\n").slice(-6).join("\n"));
-    if (/^\[Request interrupted/.test(text)) return this.note("Interrupted");
+    if (/^\[Request interrupted/.test(text)) {
+      if (this.turnState) { this.turnState.stage = "completed"; this.turnState.turnStarted = false; }
+      return this.note("Interrupted");
+    }
     // Other tag-wrapped injections (task notifications, environment context).
     if (isInternalEnvelope(text)) return;
     const attached = userAttachments(text);
@@ -242,17 +246,17 @@ export class Transcript {
       this.issue = null;
     }
     this.push({ kind: "user", text, images, files, ...(incoming.from ? { from: incoming.from } : {}) });
-    if (this.kind === "codex" && this.codexTurn) {
-      this.codexTurn.userCount++;
-      if (this.codexTurn.stage === "idle" || this.codexTurn.stage === "completed") {
-        this.codexTurn.epoch++;
-        this.codexTurn.turnStarted = false;
-        this.codexTurn.assistantCount = 0;
-        this.codexTurn.toolCount = 0;
-        this.codexTurn.lastAssistantKey = null;
-        this.codexTurn.stage = "awaiting_text";
-      } else if (this.codexTurn.stage === "assistant_logged") {
-        this.codexTurn.stage = "awaiting_text";
+    if (this.turnState) {
+      this.turnState.userCount++;
+      if (this.turnState.stage === "idle" || this.turnState.stage === "completed") {
+        this.turnState.epoch++;
+        this.turnState.turnStarted = false;
+        this.turnState.assistantCount = 0;
+        this.turnState.toolCount = 0;
+        this.turnState.lastAssistantKey = null;
+        this.turnState.stage = "awaiting_text";
+      } else if (this.turnState.stage === "assistant_logged") {
+        this.turnState.stage = "awaiting_text";
       }
     }
   }
@@ -304,6 +308,18 @@ export class Transcript {
     else this.push({ kind: "assistant", text });
   }
 
+  thinking(text) {
+    const clean = text?.trim();
+    if (!clean) return;
+    const prev = this.last();
+    if (prev?.kind === "thinking" && prev.key !== this.breakAfter) {
+      if (prev.text === clean || prev.text.endsWith(clean)) return;
+      prev.text += "\n\n" + clean;
+    } else {
+      this.push({ kind: "thinking", text: clean });
+    }
+  }
+
   toolUse(id, name, input) {
     let group = this.last();
     if (group?.kind !== "tools" || group.key === this.breakAfter) group = this.push({ kind: "tools", items: [] });
@@ -343,8 +359,10 @@ export class Transcript {
 
   claude(d) {
     if (d.isSidechain) return;
-    if (d.type === "system" && d.subtype === "turn_duration")
+    if (d.type === "system" && d.subtype === "turn_duration") {
+      if (this.turnState) { this.turnState.stage = "completed"; this.turnState.turnStarted = false; }
       return this.completed(d.durationMs, d.timestamp, d.uuid);
+    }
     if (d.type === "system" && d.subtype === "api_error")
       return this.agentError(d.error ?? d.content ?? d, d.timestamp, this.turnId ?? d.uuid);
     if (d.type === "queue-operation") {
@@ -409,7 +427,8 @@ export class Transcript {
       // How full the context is: what the latest reply was sent and wrote.
       if (u && !d.message.model?.startsWith("<")) {
         if (this.base == null) this.base = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-        this.context = { used: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0), window: this.context?.window ?? null };
+        const defaultWindow = /\[1m\]|-1m\b/i.test(d.message.model ?? this.model ?? "") ? 1000000 : 200000;
+        this.context = { used: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0), window: this.context?.window ?? defaultWindow };
       }
       if (u && id && !d.message.model?.startsWith("<")) {
         const m = (this.tokens[d.message.model] ??= { input: 0, output: 0 });
@@ -425,8 +444,21 @@ export class Transcript {
         }
       }
       for (const b of d.message?.content ?? []) {
-        if (b?.type === "text") this.assistant(b.text);
-        else if (b?.type === "tool_use") this.toolUse(b.id, b.name, b.input);
+        if (b?.type === "thinking") this.thinking(b.thinking ?? b.text ?? "");
+        else if (b?.type === "text") {
+          this.assistant(b.text);
+          if (this.turnState && b.text?.trim()) {
+            this.turnState.assistantCount++;
+            this.turnState.lastAssistantKey = this.last()?.key ?? null;
+            this.turnState.stage = "assistant_logged";
+          }
+        } else if (b?.type === "tool_use") {
+          this.toolUse(b.id, b.name, b.input);
+          if (this.turnState) {
+            this.turnState.toolCount++;
+            if (this.turnState.stage !== "completed") this.turnState.stage = "awaiting_text";
+          }
+        }
       }
     }
   }
@@ -507,7 +539,16 @@ export class Transcript {
       if (p.rate_limits) this.limits = p.rate_limits;
       return;
     }
+    if (d.type === "event_msg" && p.type === "agent_reasoning") {
+      this.thinking(p.text);
+      return;
+    }
     if (d.type !== "response_item") return;
+    if (p.type === "reasoning") {
+      const text = toText(p.summary?.length ? p.summary : p.content);
+      this.thinking(text);
+      return;
+    }
     if (p.type === "message") {
       if (p.role === "assistant") {
         const text = toText((p.content ?? []).filter((c) => c?.type === "output_text"));

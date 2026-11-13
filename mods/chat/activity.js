@@ -103,13 +103,32 @@ export function toolDetails(item) {
         }
       }
     }
-    const name=changes.length?'Edit':commands.length?'Bash':wait?'Wait':wrapper?'Tool script':item.name;
+    const todos = [];
+    let planExplanation = "";
+    for (const action of actions) {
+      if (action.name === "Write" && action.input?.file_path && !changes.some((c) => c.path === action.input.file_path)) {
+        const text = typeof action.input.content === "string" ? action.input.content : "";
+        const diff = text ? text.replace(/\r\n/g, "\n").split("\n").map((l) => `+${l}`).join("\n") : "";
+        changes.push({ path: action.input.file_path, operation: "add", diff });
+      } else if (action.name === "TodoWrite" && Array.isArray(action.input?.todos)) {
+        for (const t of action.input.todos) {
+          if (t?.content) todos.push({ text: String(t.content), activeForm: t.activeForm ?? "", status: t.status ?? "pending" });
+        }
+      } else if (action.name === "update_plan" && Array.isArray(action.input?.plan)) {
+        if (typeof action.input.explanation === "string" && action.input.explanation.trim()) planExplanation = action.input.explanation.trim();
+        for (const t of action.input.plan) {
+          if (t?.step) todos.push({ text: String(t.step), activeForm: "", status: t.status ?? "pending" });
+        }
+      }
+    }
+    const name=todos.length?'Plan':changes.length?'Edit':commands.length?'Bash':wait?'Wait':wrapper?'Tool script':item.name;
     const short=path=>path.split(/[\\/]/).at(-1);
-    const summary=changes.length?[changes.map(file=>short(file.path)).join(', '),...commands].join('; '):commands.length?commands.join('; '):wait?'Command output':wrapper?'Run tool script':item.summary;
+    const doneCount=todos.filter(t=>t.status==='completed').length;
+    const summary=todos.length?`${doneCount}/${todos.length} done`:changes.length?[changes.map(file=>short(file.path)).join(', '),...commands].join('; '):commands.length?commands.join('; '):wait?'Command output':wrapper?'Run tool script':item.summary;
     const patches=actions.filter(action=>action.name==='apply_patch').map(action=>action.input);
     const displayInput=changes.length?(patches.length?[...patches,...commands].join('\n'):input)
       :commands.length?commands.join('\n'):input;
-    known={source:item.input,name:item.name,wrapper,isPatch:patches.length>0,details:{name,summary,changes,commands,displayInput}};cache.set(item,known);
+    known={source:item.input,name:item.name,wrapper,isPatch:patches.length>0,details:{name,summary,changes,commands,displayInput,todos,planExplanation}};cache.set(item,known);
   }
   const result = typeof item.result === 'string' ? item.result : '';
   const patchFailed = known.isPatch && /(?:^|\n)(?:apply_patch verification failed:|Failed to find expected lines|Error:)/i.test(result);
@@ -125,7 +144,16 @@ export function withChanges(entries) {
   };
   for(const entry of entries) {
     if((entry.kind==='user'&&!entry.command)||(entry.kind==='notice'&&entry.event==='completed'))flush();
-    result.push(entry);
+    if(entry.kind==='tools') {
+      // The change card already summarizes a successful edit-only call.
+      // Keep mixed calls, failures and pending edits in the activity stream.
+      const visible=entry.items.filter(raw=>{
+        const detail=toolDetails(raw);
+        return !(raw.result!==null&&!detail.error&&detail.name==='Edit'&&detail.changes.length
+          &&!detail.commands.length&&!detail.todos?.length&&!detail.images?.length);
+      });
+      if(visible.length)result.push({...entry,items:visible});
+    } else result.push(entry);
     if(entry.kind==='tools')for(const raw of entry.items) {
       // Only acknowledged successful calls can claim an applied change.
       const detail = toolDetails(raw);

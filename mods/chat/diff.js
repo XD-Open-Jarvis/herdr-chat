@@ -1,5 +1,18 @@
 // Format recorded changes only; never reconstruct old code from today's files.
+const lineCache = new WeakMap();
+const groupCache = new WeakMap();
+
 export function diffLines(file) {
+  if (file && typeof file === "object") {
+    const cached = lineCache.get(file);
+    if (cached && cached.diff === file.diff) return cached.result;
+  }
+  const result = computeDiffLines(file);
+  if (file && typeof file === "object") lineCache.set(file, { diff: file.diff, result });
+  return result;
+}
+
+function computeDiffLines(file) {
   const raw = (file.diff ?? "").replace(/\r\n/g, "\n");
   const path = value => String(value).replace(/^[/\\]+/, "").replace(/\\/g, "/");
   const before = path(file.oldPath ?? file.path), after = path(file.path);
@@ -22,11 +35,16 @@ export function diffLines(file) {
     : text.startsWith("@@") ? "hunk" : text.startsWith("+") ? "added" : text.startsWith("-") ? "removed" : "context"}));
 }
 export function diffGroups(lines) {
+  if (Array.isArray(lines)) {
+    const cached = groupCache.get(lines);
+    if (cached && cached.length === lines.length) return cached.groups;
+  }
   const groups=[];
   for (const line of lines) {
     const previous=groups.at(-1);
     if (previous?.kind===line.kind) previous.text+='\n'+line.text;
     else groups.push({...line});
   }
+  if (Array.isArray(lines)) groupCache.set(lines, { length: lines.length, groups });
   return groups;
 }

@@ -9,6 +9,8 @@
 const CLAUDE = { mark: "⏺ ", prompt: /^❯ \S/, run: /^! \S/, tool: /^⏺ [\w.:-]+\(|^⏺ (Read|Searched|Listed|Wrote|Updated|Edited|Fetched|Ran|Called|Found)\b.*\b(file|files|pattern|patterns|lines?|director(y|ies)|command|tools?)\b/ };
 const CODEX = { mark: "• ", prompt: /^› \S/, run: /^\$ \S/, tool: /^• (Running|Ran|Explored|Exploring|Edited|Editing|Read|Reading|Searched|Searching|Called|Calling|Updated Plan|Added|Deleted|Listed|Viewed|Applied|Proposed)\b/ };
 const STATUS = /^• (Working|Waiting|Interrupted)\b/;
+const WORKED = /^(?:\s*(?:─+\s*)?Worked for \d|[·✻✽✶✳✢]\s+[A-Za-z]+\s+for\s+\d)/;
+const CLAUDE_STATUS = /^(?:[·✻✽✶✳✢]\s+\S.*(?:\u2026|\.\.\.|\besc to interrupt\b)|• (Working|Waiting|Interrupted)\b)/;
 // The full-screen view's one-line summaries of tool calls ("Running 1 shell
 // command…", "Read 2 files"): a command running, not text.
 const SUMMARY = /^(Running|Ran|Reading|Read|Searching|Searched|Listing|Listed|Writing|Wrote|Editing|Edited|Updating|Updated|Fetching|Fetched|Calling|Called|Creating|Created|Stopping|Stopped)\b.*\b(commands?|files?|patterns?|director(y|ies)|tools?|agents?|pages?|tasks?|searches)\b|^\d+ tool calls?\b/i;
@@ -24,19 +26,20 @@ export function liveSnapshot(screen, kind) {
   // This turn: after the last message sent.
   let from = 0;
   for (let i = end - 1; i >= 0; i--) if (k.prompt.test(lines[i])) { from = i + 1; break; }
+  const isStatus = (l) => (kind === "codex" ? STATUS.test(l) : CLAUDE_STATUS.test(l) && !WORKED.test(l));
   // The last block in it: a reply, a tool call or a shell command.
   let at = -1;
   for (let i = end - 1; i >= from; i--) {
     const l = lines[i];
-    if (l.startsWith(k.mark) && !STATUS.test(l)) { at = i; break; }
+    if (l.startsWith(k.mark) && !isStatus(l)) { at = i; break; }
     if (k.run.test(l)) { at = i; break; }
   }
   const promptLine = from > 0 ? lines[from - 1] : null;
   const blockOrdinal = at >= 0
-    ? lines.slice(from, at + 1).filter((l) => (l.startsWith(k.mark) && !STATUS.test(l)) || k.run.test(l)).length
+    ? lines.slice(from, at + 1).filter((l) => (l.startsWith(k.mark) && !isStatus(l)) || k.run.test(l)).length
     : 0;
-  const workedAfterAt = at >= 0 && lines.slice(at + 1, end).some((l) => /^\s*(?:─+\s*)?Worked for \d/.test(l));
-  const statusAfterAt = lines.slice(at >= 0 ? at + 1 : from, end).some((l) => STATUS.test(l));
+  const workedAfterAt = at >= 0 && lines.slice(at + 1, end).some((l) => WORKED.test(l));
+  const statusAfterAt = lines.slice(at >= 0 ? at + 1 : from, end).some(isStatus);
   if (at < 0) {
     return { item: null, end, from, at, promptLine, blockOrdinal, afterToolInBlock: false, workedAfterAt, statusAfterAt };
   }
@@ -44,7 +47,7 @@ export function liveSnapshot(screen, kind) {
   const body = [];
   for (let i = at + 1; i < end; i++) {
     const l = lines[i];
-    if ((l && !l.startsWith(" ")) || /^\s*(?:─+\s*)?Worked for \d/.test(l)) break;
+    if ((l && !l.startsWith(" ")) || WORKED.test(l)) break;
     body.push(l);
   }
   const depth = (l) => l.length - l.trimStart().length;

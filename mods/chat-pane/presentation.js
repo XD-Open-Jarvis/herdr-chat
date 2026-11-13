@@ -19,6 +19,22 @@ export function viewLayout(tree, target, extra = {}) {
   if (!stack || !template) throw new Error("Select the updated Chat layout first");
   const matches = (meta) => meta?.owner_tab === localId(target.tab)
     && meta?.owner_pane === localId(target.pane) && meta?.terminal === localId(target.terminal);
+  const live = typeof panes === "function" ? panes() : null;
+  if (Array.isArray(live) && live.length > 0) {
+    const livePanes = new Set(live.map((p) => localId(p?.pane ?? p?.id)).filter(Boolean));
+    const livePairs = new Set(live.map((p) => `${localId(p?.pane ?? p?.id)}::${localId(p?.terminal)}`));
+    const hasTermField = live.some((p) => p?.terminal);
+    stack.children = stack.children.filter((child) => {
+      if (child.id === "main" || child.id === "conversation-page") return true;
+      const meta = pageMeta(child);
+      if (!meta || matches(meta)) return true;
+      const op = localId(meta.owner_pane);
+      const ot = localId(meta.terminal);
+      if (op && !livePanes.has(op)) return false;
+      if (op && ot && hasTermField && !livePairs.has(`${op}::${ot}`)) return false;
+      return true;
+    });
+  }
   let page = stack.children.find((child) => matches(pageMeta(child)));
   if (!page) {
     page = JSON.parse(JSON.stringify(template));
