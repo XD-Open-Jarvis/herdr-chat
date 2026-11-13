@@ -359,13 +359,16 @@ export default class Chat extends View {
         // Between steps the screen can show nothing new, or only text the chat
         // already has: keep the last command's card rather than drop it and
         // bring one back (the page would jump). New reply text replaces it.
-        const fresh = text && !this.logged(text);
+        const fresh = text && !this.logged(text) && !this.previousReplyOnScreen(text);
         const run = now?.kind === "run" ? now : fresh ? null : this.running;
-        if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
+        // A blank/intermediate terminal frame must not erase a reply before
+        // the session log has recorded the complete text.
+        const stream = fresh ? text : this.stream;
+        if (stream !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = stream; this.running = run; cx.notify(); }
         await exec("sh", ["-c", "sleep 0.35"]);
       }
       if (this.streamLoop === loop) this.streamLoop = null;
-      this.stream = null;
+      if (this.stream && this.logged(this.stream)) this.stream = null;
       this.running = null;
       if (this.chatVisible()) cx.notify();
     });
@@ -475,20 +478,37 @@ export default class Chat extends View {
   // Whether the log already has this reply text (in this turn).
   logged(text) {
     const norm = (x) => (x ?? "").replace(/[\s*_`#>]+/g, " ").trim();
-    // The start or the end: a long reply can be partly off the terminal's screen.
-    const n = norm(text), head = n.slice(0, 80), tail = n.slice(-80);
+    const n = norm(text);
+    if (!n) return false;
     const ents = this.t?.entries ?? [];
     for (let i = ents.length - 1; i >= 0 && ents[i].kind !== "user"; i--) {
       if (ents[i].kind !== "assistant") continue;
       const e = norm(ents[i].text);
-      if (e.includes(head) || e.includes(tail)) return true;
+      // A matching prefix alone does not mean the rest of the live reply is
+      // present in the log yet.
+      if (e.includes(n)) return true;
     }
     return false;
   }
 
+  previousReplyOnScreen(text) {
+    const old = this.previousReply;
+    if (!old || !text) return false;
+    const norm = (x) => x.replace(/[\s*_`#>]+/g, " ").trim();
+    const current = norm(text), previous = norm(old);
+    return current.length >= 20 && (previous.includes(current) || previous.includes(current.slice(0, 80)) && previous.includes(current.slice(-80)));
+  }
+
+  markNewInput() {
+    this.previousReply = [...(this.t?.entries ?? [])].reverse().find(entry => entry.kind === "assistant")?.text ?? this.stream;
+    this.stream = null;
+    this.running = null;
+    this.t?.markInput();
+  }
+
   // The streamed reply, unless the log already has it.
   streamShown() {
-    return this.stream && !this.logged(this.stream) ? this.stream : null;
+    return this.pending.length === 0 && this.stream && !this.logged(this.stream) && !this.previousReplyOnScreen(this.stream) ? this.stream : null;
   }
 
   // How often each command was sent here: the menu puts those first.
@@ -1476,7 +1496,7 @@ export default class Chat extends View {
     const pending = { ...item, files: item.paths.length, users: this.userCount(),
       afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now(), delivering: true };
     this.pending.push(pending);
-    this.t?.markInput();
+    this.markNewInput();
     cx.notify();
     cx.spawn(async cx => {
       let error = null, paused = false;
@@ -1754,7 +1774,7 @@ export default class Chat extends View {
     if (!/^[\/!]/.test(text)) {
       this.pending.push({ text, files: files.length, attachments, users: this.userCount(),
         afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now() });
-      this.t?.markInput();
+      this.markNewInput();
     }
     this.stream = null; this.running = null;
     cx.spawn(async (cx) => this.deliver(text, files, cx));
