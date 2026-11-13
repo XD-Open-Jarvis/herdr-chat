@@ -745,6 +745,150 @@ test("readTailOnce wakes ensureFollow('codex') immediately when new log lines le
   assert.deepEqual(wokeArgs, { kind: "codex", graceMs: 1800 });
 });
 
+test("single readTailOnce batch with [commentary, function_call] drops visibleStream immediately and promotes loggedSlot", async () => {
+  const { Chat } = makeChatClass();
+  const { cx } = makeCx();
+  const t = new Transcript("codex");
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }));
+
+  const commentaryScreen = [
+    "› check files",
+    "",
+    "• 让我先查看一下文件。",
+    "",
+    "›",
+  ].join("\n");
+  const snap = liveSnapshot(commentaryScreen, "codex");
+  const handoff = new CodexHandoff();
+  const r1 = handoff.update(snap, { codexTurn: t.codexTurn, termStatus: "working", hasPriorAssistant: false });
+  assert.equal(r1.streamText, "让我先查看一下文件。");
+  assert.equal(handoff.visibleStream(t.codexTurn), "让我先查看一下文件。");
+
+  const tail = {
+    truncated: false,
+    read: async () => [
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "让我先查看一下文件。" }] },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "function_call", call_id: "c1", name: "read_file", arguments: "{}" },
+      }),
+    ],
+  };
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    gen: 1,
+    t,
+    codexHandoff: handoff,
+    activeTail: { gen: 1, tail, kind: "codex", ready: true, chain: Promise.resolve() },
+    chatVisible: () => true,
+    cacheShown() {},
+    nameSpace() {},
+    ensureFollow() {},
+    terminal: () => ({ status: "working" }),
+  });
+
+  await chat.readTailOnce(cx);
+  assert.equal(t.codexTurn.assistantCount, 1);
+  assert.equal(t.codexTurn.stage, "awaiting_text");
+  // Synchronous render gate must immediately drop stream on that frame
+  assert.equal(chat.streamShown(), null);
+
+  // Next follow() tick on the same screen must promote loggedSlot and reject as stale_logged_slot
+  const r2 = handoff.update(snap, { codexTurn: t.codexTurn, termStatus: "working", hasPriorAssistant: true });
+  assert.equal(r2.streamText, null);
+  assert.equal(r2.reason, "stale_logged_slot");
+  assert.equal(handoff.loggedSlot.assistantCount, 1);
+  assert.equal(handoff.loggedSlot.text, "让我先查看一下文件。");
+});
+
+test("ensureFollow('codex') called during exit flushTail starts a fresh follow loop instead of being swallowed", async () => {
+  let status = "working";
+  let screen = [
+    "› turn 1",
+    "",
+    "• Streaming turn 1 reply",
+    "",
+    "›",
+  ].join("\n");
+  const { Chat } = makeChatClass({
+    hc: async (args) => (args[0] === "read" ? { code: 0, stdout: screen, stderr: "" } : { code: 0, stdout: "", stderr: "" }),
+  });
+  const { cx, flushTasks } = makeCx();
+  const t = new Transcript("codex");
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }));
+
+  let resolveExitFlush;
+  const exitFlushGate = new Promise((r) => { resolveExitFlush = r; });
+  let inExitFlush = false;
+  let flushCount = 0;
+
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    gen: 1,
+    t,
+    pending: [],
+    codexHandoff: new CodexHandoff(),
+    chatVisible: () => true,
+    terminal: () => ({ address: "t1", status }),
+    flushTail: async () => {
+      flushCount++;
+      if (flushCount === 1) {
+        inExitFlush = true;
+        await exitFlushGate;
+      }
+      return 0;
+    },
+  });
+  Object.defineProperty(chat, "term", { value: "t1" });
+
+  let notifyCount = 0;
+  cx.notify = () => {
+    notifyCount++;
+    if (notifyCount === 1) {
+      // Trigger exit drain of loop 1
+      status = "idle";
+    }
+  };
+
+  chat.follow("codex", cx);
+  // Wait until loop 1 enters exit flushTail
+  for (let i = 0; i < 40 && !inExitFlush; i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(inExitFlush, true);
+  const exitingLoop = chat.streamLoop;
+  assert.equal(exitingLoop.exiting, true);
+
+  // New turn triggers ensureFollow while loop 1 is awaiting flushTail
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t2" } }));
+  screen = [
+    "› turn 2",
+    "",
+    "• Streaming turn 2 reply",
+    "",
+    "›",
+  ].join("\n");
+  status = "working";
+  chat.ensureFollow("codex", cx, 1800);
+
+  const newLoop = chat.streamLoop;
+  assert.notEqual(newLoop, exitingLoop);
+  assert.equal(newLoop.exiting, false);
+
+  // Release loop 1's exit flush: must NOT clobber newLoop or new turn's stream!
+  resolveExitFlush();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(chat.streamLoop, newLoop);
+  assert.equal(chat.streamShown(), "Streaming turn 2 reply");
+
+  // Cleanly finish loop 2
+  status = "idle";
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t2", duration_ms: 100 } }));
+  await flushTasks();
+  assert.equal(chat.streamLoop, null);
+});
+
 // --- HandoffTracer: monotonic JSONL, deduplication, disabled no-op ---
 
 test("HandoffTracer writes monotonic JSONL events and deduplicates high-frequency signatures only when enabled", async () => {

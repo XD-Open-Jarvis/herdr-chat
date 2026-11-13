@@ -12,6 +12,10 @@ export class CodexHandoff {
     this.latestSnapshot = null;
     this.acceptedText = null;
     this.acceptedEpoch = 0;
+    this.acceptedAssistantCount = 0;
+    this.acceptedBlockOrdinal = 0;
+    this.acceptedPromptLine = null;
+    this.drainedSlot = null;
     this.running = null;
     this.retired = null;
     this.loggedSlot = null;
@@ -35,6 +39,10 @@ export class CodexHandoff {
       };
     }
     this.acceptedText = null;
+    this.acceptedAssistantCount = 0;
+    this.acceptedBlockOrdinal = 0;
+    this.acceptedPromptLine = null;
+    this.drainedSlot = null;
     this.running = null;
     this.draining = false;
   }
@@ -46,6 +54,15 @@ export class CodexHandoff {
 
   /** Ends an async Tail drain and releases the drained active-slot text. */
   endDrain({ keepRun = false } = {}) {
+    if (this.acceptedText) {
+      this.drainedSlot = {
+        epoch: this.acceptedEpoch,
+        assistantCount: this.acceptedAssistantCount,
+        text: this.acceptedText,
+        blockOrdinal: this.acceptedBlockOrdinal,
+        promptLine: this.acceptedPromptLine,
+      };
+    }
     this.draining = false;
     this.acceptedText = null;
     if (!keepRun) this.running = null;
@@ -65,6 +82,10 @@ export class CodexHandoff {
       };
     }
     this.acceptedText = null;
+    this.acceptedAssistantCount = 0;
+    this.acceptedBlockOrdinal = 0;
+    this.acceptedPromptLine = null;
+    this.drainedSlot = null;
     this.running = null;
     this.draining = false;
   }
@@ -111,8 +132,44 @@ export class CodexHandoff {
         promptLine: snapshot?.promptLine ?? (sameSlot ? this.loggedSlot?.promptLine : null) ?? null,
       };
       this.acceptedText = null;
+      this.drainedSlot = null;
       this.running = snapshot?.item?.kind === "run" ? snapshot.item : null;
       return { streamText: null, running: this.running, shouldDrainBeforeDrop: false, reason: "slot_logged" };
+    }
+
+    // If commentary + *_call arrived in a single Tail batch between follow()
+    // ticks, promote the previously accepted slot into loggedSlot even though
+    // codexTurn.stage already transitioned back to "awaiting_text".
+    const priorSlot = this.acceptedText
+      ? {
+          epoch: this.acceptedEpoch,
+          assistantCount: this.acceptedAssistantCount,
+          text: this.acceptedText,
+          blockOrdinal: this.acceptedBlockOrdinal,
+          promptLine: this.acceptedPromptLine,
+        }
+      : this.drainedSlot;
+    if (
+      priorSlot &&
+      codexTurn &&
+      codexTurn.epoch === priorSlot.epoch &&
+      codexTurn.assistantCount > priorSlot.assistantCount
+    ) {
+      if (
+        !this.loggedSlot ||
+        this.loggedSlot.epoch !== codexTurn.epoch ||
+        this.loggedSlot.assistantCount < codexTurn.assistantCount
+      ) {
+        this.loggedSlot = {
+          epoch: codexTurn.epoch,
+          assistantCount: codexTurn.assistantCount,
+          text: priorSlot.text,
+          blockOrdinal: priorSlot.blockOrdinal,
+          promptLine: priorSlot.promptLine,
+        };
+      }
+      this.acceptedText = null;
+      this.drainedSlot = null;
     }
 
     if (codexTurn && codexTurn.stage === "idle") {
@@ -158,6 +215,10 @@ export class CodexHandoff {
       }
       this.acceptedText = snapshot.item.text;
       this.acceptedEpoch = codexTurn?.epoch ?? 0;
+      this.acceptedAssistantCount = codexTurn?.assistantCount ?? 0;
+      this.acceptedBlockOrdinal = snapshot.blockOrdinal ?? 0;
+      this.acceptedPromptLine = snapshot.promptLine ?? null;
+      this.drainedSlot = null;
       this.running = null;
       return { streamText: this.acceptedText, running: null, shouldDrainBeforeDrop: false, reason: "live_stream" };
     }
@@ -189,6 +250,7 @@ export class CodexHandoff {
     if (codexTurn?.stage === "completed" || codexTurn?.stage === "assistant_logged") return null;
     if (codexTurn && codexTurn.stage === "idle" && codexTurn.epoch > 0) return null;
     if (codexTurn && this.acceptedEpoch !== codexTurn.epoch && codexTurn.epoch > 0) return null;
+    if (codexTurn && this.acceptedEpoch === codexTurn.epoch && codexTurn.assistantCount > this.acceptedAssistantCount) return null;
     return this.acceptedText;
   }
 }

@@ -370,11 +370,14 @@ export default class Chat extends View {
       return;
     }
     if (this.streamLoop) {
-      if (this.streamLoop.kind === "codex" && graceMs > 0) {
-        const until = Date.now() + graceMs;
-        if (until > (this.streamLoop.graceUntil ?? 0)) this.streamLoop.graceUntil = until;
+      if (!this.streamLoop.exiting) {
+        if (this.streamLoop.kind === "codex" && graceMs > 0) {
+          const until = Date.now() + graceMs;
+          if (until > (this.streamLoop.graceUntil ?? 0)) this.streamLoop.graceUntil = until;
+        }
+        return;
       }
-      return;
+      if (this.codexHandoff?.draining) this.codexHandoff.endDrain();
     }
     this.follow("codex", cx, graceMs);
   }
@@ -437,7 +440,7 @@ export default class Chat extends View {
       return;
     }
 
-    const loop = (this.streamLoop = { kind: "codex", graceUntil: graceMs > 0 ? Date.now() + graceMs : 0 });
+    const loop = (this.streamLoop = { kind: "codex", exiting: false, graceUntil: graceMs > 0 ? Date.now() + graceMs : 0 });
     cx.spawn(async (cx) => {
       if (this.chatVisible()) {
         this.tracer?.record("follow_start", {
@@ -495,6 +498,7 @@ export default class Chat extends View {
         await sleep(cx, 350);
       }
       if (this.streamLoop === loop) {
+        loop.exiting = true;
         const stillVisible = this.codexHandoff?.visibleStream(this.t?.codexTurn);
         if (stillVisible) {
           this.tracer?.record("follow_drain", { phase: "exit", stage: this.t?.codexTurn?.stage ?? null });
