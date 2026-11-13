@@ -363,7 +363,7 @@ export default class Agents extends View {
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(h_flex().flex_1().min_w(0).gap(4)
-            .child(div().size(8).flex_none().rounded_full().bg(spaceColor))
+            .child(div().size(4).flex_none().rounded_full().bg(spaceColor))
             .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(more)))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
