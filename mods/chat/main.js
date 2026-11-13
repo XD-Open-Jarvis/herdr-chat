@@ -1858,7 +1858,7 @@ export default class Chat extends View {
         .child(div().text_size(11).text_color(t.muted).child(this.outbox.retryReason(context, item.id) ?? item.error)))));
   }
 
-  outboxView(t) {
+  outboxView(t, inline = false) {
     const items = this.outbox.visibleItems;
     if (!items.length) return null;
     const context = this.queueContext();
@@ -1866,13 +1866,15 @@ export default class Chat extends View {
     const expanded = Boolean(this.outboxExpanded ?? hasError);
     const height = Math.min(240, this.outboxHeight ?? items.length * 80);
     const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
+    const toggle = h_flex().id("outbox-toggle").px(12).py(inline ? 2 : 9).gap(8).items_center().justify_end()
+      .cursor_pointer().text_size(12).text_color(hasError ? t.blocked : t.muted).hover(style => style.text_color(t.foreground))
+      .on_click((_e, cx) => { this.outboxExpanded = !expanded; this.outboxHovered = null; cx.notify(); })
+      .child(hasError ? `${items.length} queued · delivery failed` : `${items.length} queued`)
+      .child(div().text_size(11).child(expanded ? "▴" : "▾"));
+    if (inline && !expanded) return toggle.flex_none();
     return h_flex().w_full().justify_center().child(v_flex().id("outbox").w_full().max_w(900)
       .rounded(18).overflow_hidden()
-      .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
-        .cursor_pointer().text_size(12).text_color(hasError ? t.blocked : t.muted).hover(style => style.text_color(t.foreground))
-        .on_click((_e, cx) => { this.outboxExpanded = !expanded; this.outboxHovered = null; cx.notify(); })
-        .child(hasError ? `${items.length} queued · delivery failed` : `${items.length} queued`)
-        .child(div().text_size(11).child(expanded ? "▴" : "▾")))
+      .child(toggle.w_full())
       .when(expanded, el => el.border_1().border_color(hasError ? t.blocked : t.input).child(div().id("outbox-scroll").w_full()
         .h(height).flex_none().relative().overflow_hidden().border_t(1).border_color(t.border)
         .on_scroll_wheel((e, cx) => {
@@ -2710,11 +2712,11 @@ export default class Chat extends View {
           .child(entry.files.length===1?this.changeHover(`heading-${entry.key}`,title,entry.files[0],entry.key,t):title)
           .child(div().flex_1()))
         .child(stats(overview.added,overview.removed)))
-      .child(div().id(`diff-toggle-${entry.key}`).flex_none().h(28).px(12).rounded_full().border(settings().dark ? 1 : 0.5)
+      .child(div().id(`diff-toggle-${entry.key}`).flex_none().h(28).px(12).rounded_full().border(0.5)
         .border_color(settings().dark?t.input:t.border).flex().items_center().justify_center()
         .cursor_pointer().text_size(12).text_color(t.foreground)
         .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx)).child("View changes"));
-    return v_flex().w_full().min_w(0).rounded(12).border(settings().dark ? 1 : 0.5).border_color(t.border).overflow_hidden()
+    return v_flex().w_full().min_w(0).rounded(12).border(0.5).border_color(t.border).overflow_hidden()
       .on_size_change((size,cx)=>{this.changeWidths??={};if(this.changeWidths[entry.key]!==size.width){this.changeWidths[entry.key]=size.width;cx.notify();}})
       .child(heading)
       .when(entry.files.length>1,el=>el.child(v_flex().border_t(settings().dark ? 1 : 0.5).border_color(t.border)
@@ -2738,7 +2740,7 @@ export default class Chat extends View {
     const command = typeof item.displayInput === "string" ? item.displayInput : item.input?.cmd ?? item.input?.command ?? item.summary;
     const pendingOutput = item.sessionId != null && item.exitCode == null;
     return v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8).rounded(12)
-      .border_1().border_color(item.error ? t.blocked : t.input).bg(t.surface)
+      .border(0.5).border_color(item.error ? t.blocked : t.input).bg(t.surface)
       .child(div().text_size(12).text_color(t.muted).child("Shell"))
       .child(this.plainOutput(`${id}-command`, `$ ${command ?? ""}`, { ...t, muted: t.foreground }, false, false))
       .when(Boolean(item.result?.trim()), el => el.child(div().w_full().min_w(0).pt(8).border_t(1).border_color(t.border)
@@ -2767,20 +2769,30 @@ export default class Chat extends View {
         .when(!running && (i.error || i.result === null), el => el.child(div().text_size(11).text_color(i.error ? t.blocked : t.dim).child(i.error ? "Error" : "Pending")))
         .child(svg(`mods/chat/icons/${open ? "chevron-down" : "chevron"}.svg`).size(12).flex_none()))
       .when(open && i.name === "Bash", el => el.child(this.shellDetails(id, i, t, running)))
-      .when(open && i.name !== "Bash" && i.input != null, el => el.child(v_flex().px(12).pb(10).gap(4)
-        .child(div().text_size(11).text_color(t.dim).child("Input"))
-        .child(this.plainOutput(`${id}-input`, typeof i.displayInput === "string" ? i.displayInput
-          : i.displayInput?.command ?? i.displayInput?.cmd ?? JSON.stringify(i.displayInput, null, 2), t, false, false))))
-      .when(open && i.name !== "Bash" && Boolean(i.result?.trim()), el => el.child(v_flex().px(12).pb(10).gap(4)
-        .child(div().text_size(11).text_color(t.dim).child("Output"))
-        .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
-      .when(open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
+      .when(open && i.name !== "Bash", el => el.child(v_flex().w_full().min_w(0).mt(6).px(12).py(10).gap(8)
+        .rounded(12).border(0.5).border_color(i.error ? t.blocked : t.input)
+        .when(i.input != null, row => row.child(v_flex().gap(4)
+          .child(div().text_size(11).text_color(t.dim).child("Input"))
+          .child(this.plainOutput(`${id}-input`, typeof i.displayInput === "string" ? i.displayInput
+            : i.displayInput?.command ?? i.displayInput?.cmd ?? JSON.stringify(i.displayInput, null, 2), t, false, false))))
+        .when(Boolean(i.result?.trim()), row => row.child(v_flex().gap(4)
+          .child(div().text_size(11).text_color(t.dim).child("Output"))
+          .child(this.plainOutput(`${id}-result`, i.result, t, i.error, false))))
+        .when(i.displayInput !== i.input, row => row.child(v_flex().gap(4)
+          .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
+            this.toggleCard(`raw-${id}`, cx);
+          }, t).w_auto().self_start().bg(t.background).text_color(t.dim).px(0).py(2))
+          .when(this.open.has(`raw-${id}`), details => details.child(this.plainOutput(`${id}-raw`,
+            typeof i.input === "string" ? i.input : JSON.stringify(i.input, null, 2), t, false, false)))))
+        .when(i.images.length > 0, row => row.child(h_flex().flex_wrap().gap(6)
+          .children(i.images.map(image => this.img(image.ref, t, 420, 300)))))))
+      .when(i.name === "Bash" && open && i.displayInput !== i.input, el => el.child(v_flex().px(12).pb(8).gap(4)
         .child(this.button(`raw-${id}`, this.open.has(`raw-${id}`) ? "Hide raw details" : "Raw details", (_e, cx) => {
           this.toggleCard(`raw-${id}`, cx);
         }, t).w_auto().self_start().bg(t.background).text_color(t.dim).px(0).py(2))
         .when(this.open.has(`raw-${id}`), row => row.child(this.plainOutput(`${id}-raw`,
           typeof i.input === "string" ? i.input : JSON.stringify(i.input, null, 2), t, false, false)))))
-      .when(i.images.length > 0, el => el.child(h_flex().px(12).pb(10).flex_wrap().gap(6)
+      .when(i.images.length > 0 && (!open || i.name === "Bash"), el => el.child(h_flex().px(12).pb(10).flex_wrap().gap(6)
         .children(i.images.map(image => this.img(image.ref, t, 420, 300)))));
   }
 
@@ -3058,6 +3070,8 @@ export default class Chat extends View {
   footer(term, t) {
     const status = term?.status;
     const working = status === "working";
+    const inlineQueue = working && !this.dialog && this.outbox.visibleItems.length > 0
+      && !Boolean(this.outboxExpanded ?? this.outbox.visibleItems.some(item => item.state === "error"));
     const typed = Boolean(this.input.value().trim()) || this.attach.length > 0;
     // A command chosen from the menu: what it takes, under the message box.
     const chosen = !this.dialog && !this.slash() && this.input.content().tokens.length > 0 ? this.typedCommand() : null;
@@ -3065,7 +3079,7 @@ export default class Chat extends View {
     const icon = (id, text, action, on) => div().id(id).flex_none().size(30).rounded_full().flex().items_center().justify_center()
       .cursor_pointer().text_size(16).text_color(t.muted).when(Boolean(on), (el) => el.bg(t.hover))
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
-    const card = v_flex().w_full().max_w(900).rounded(18).border(settings().dark ? 1 : 0.5).border_color(this.inputFocused ? t.input : t.border)
+    const card = v_flex().w_full().max_w(900).rounded(18).border(0.5).border_color(this.inputFocused ? t.input : t.border)
       .bg(settings().dark ? t.background : "#00000000").when(settings().dark, el => el.shadow_sm())
       .when(this.attach.length > 0, (el) => el.child(h_flex().px(12).pt(12).gap(8).flex_wrap().children(this.attach.map((a, n) =>
         div().relative()
@@ -3108,7 +3122,8 @@ export default class Chat extends View {
           .child(this.button("usage-terminal", "Show TUI", (_e, cx) => this.showTerminal(cx), t)))))
       .when(working, (el) => el.child(h_flex().w_full().justify_center().child(h_flex().w_full().max_w(900).px(6).gap(8).items_center().text_size(12).text_color(t.muted)
         .child(div().flex_none().text_color(t.working).frames(SPINNER, 90))
-        .child(div().flex_1().min_w(0).truncate().child(term.report?.msg || "Working…")))))
+        .child(div().flex_1().min_w(0).truncate().child(term.report?.msg || "Working…"))
+        .when(inlineQueue, row => row.child(this.outboxView(t, true))))))
       .when((status === "blocked" || Boolean(this.idleAsk)) && Boolean(this.t), (el) => el.child(h_flex().w_full().justify_center()
         .child(div().w_full().max_w(900).child(this.promptBox("The agent is asking:", t)))))
       .when(Boolean(this.error), (el) => el.child(h_flex().w_full().justify_center()
@@ -3118,7 +3133,7 @@ export default class Chat extends View {
       .when(!this.slash() && Boolean(this.emojiMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.emojiView(t))))
       .when(!this.slash() && Boolean(this.mentionMenu()), (el) => el.child(h_flex().w_full().justify_center().child(this.mentionView(t))))
       .when(!this.dialog && this.outbox.failedItems.length > 0, el => el.child(this.failedSendsView(t)))
-      .when(!this.dialog && this.outbox.visibleItems.length > 0, el => el.child(this.outboxView(t)))
+      .when(!this.dialog && this.outbox.visibleItems.length > 0 && !inlineQueue, el => el.child(this.outboxView(t)))
       .child(h_flex().w_full().justify_center().child(card));
   }
 

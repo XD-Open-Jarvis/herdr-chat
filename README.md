@@ -28,7 +28,7 @@ cd herdr-chat
 python3 scripts/install.py --install
 ```
 
-For an existing installation, update the checkout and run `python3 scripts/install.py --update`. The installer validates the six mods first, backs up files it replaces under `~/.config/herdr-app/backups/`, merges a nonconflicting New Chat shortcut, and selects the Chat layout. It does not migrate sessions or change core documents. A second Mac must connect to the target machine separately.
+For an existing installation, update the checkout and run `python3 scripts/install.py --update`. The installer validates the seven mods first, backs up files it replaces under `~/.config/herdr-app/backups/`, merges a nonconflicting New Chat shortcut, and selects the Chat layout. It does not migrate sessions or change core documents. A second Mac must connect to the target machine separately.
 
 To inspect an installation without changing it, run `python3 scripts/install.py --diagnose`. `HERDR_APP_HOME` or `--home` selects another app home.
 
@@ -36,7 +36,7 @@ To inspect an installation without changing it, run `python3 scripts/install.py 
 
 Chat is a local presentation of the original terminal pane. Switching to Chat does not split, zoom, park, or close that pane. Other clients, including mobile, continue to see the terminal. The left sidebar has separate **New Chat** and **New Space** buttons. Images open in an internal Herdr window with zoom, pan, and Escape to close.
 
-The six mods are `chat`, `chat-file`, `chat-preview`, `chat-pane`, `chat-tabs`, and `spaces-chat`. See [RECIPE.md](RECIPE.md) for the layout contract. The package includes `layouts/chat.json`, `layouts/chat.svg`, two theme files, and a keybinding recipe.
+The seven mods are `chat`, `chat-file`, `chat-preview`, `chat-pane`, `chat-tabs`, `spaces-chat`, and `agents-chat`. See [RECIPE.md](RECIPE.md) for the layout contract. The package includes `layouts/chat.json`, `layouts/chat.svg`, two theme files, and a keybinding recipe.
 
 ## Current limitations
 
