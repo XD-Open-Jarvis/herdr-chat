@@ -31,6 +31,7 @@ import { live, liveSnapshot } from "./stream.js";
 import { CodexHandoff } from "./handoff.js";
 import { HandoffTracer } from "./trace.js";
 import { withPending } from "./timeline.js";
+import { splitMarkdownTables } from "./table.js";
 import { sidebarVisible, hoverGeometry } from "./hover-diff.js";
 import { fileLink, previewKey, previewLayout } from "./preview.js";
 import { diffLines, diffGroups } from "./diff.js";
@@ -577,10 +578,11 @@ export default class Chat extends View {
   // a Copy button and a Play button: shell code runs in a console beside the
   // chat when one is open; otherwise Play puts the code in the message box.
   reply(e, t) {
-    const parts = splitCode(e.text ?? "");
+    const parts = splitCode(e.text ?? "").flatMap(part => part.md != null ? splitMarkdownTables(part.md) : [part]);
     if (parts.length === 1 && parts[0].md != null) return div().w_full().child(this.markdown(e.key, e.text));
     return v_flex().w_full().gap(8).children(parts.map((p, n) => {
       if (p.md != null) return div().w_full().child(this.markdown(`${e.key}-${n}`, p.md));
+      if (p.table) return this.markdownTable(`${e.key}-${n}`, p.table, t);
       const id = `${e.key}-${n}`;
       const done = this.copied === id;
       const con = SHELL_LANGS.has(p.lang.toLowerCase()) ? this.shellPane() : null;
@@ -604,6 +606,22 @@ export default class Chat extends View {
               cx.notify();
             })));
     }));
+  }
+
+  markdownTable(id, table, t) {
+    const stroke = settings().dark ? 1 : 0.5;
+    return v_flex().w_full().rounded(10).overflow_hidden().border(stroke).border_color(t.border)
+      .children(table.rows.map((row, rowIndex) => h_flex().w_full()
+        .bg(rowIndex === 0 ? t.surface : t.background)
+        .when(rowIndex === 0, el => el.rounded_t(9))
+        .when(rowIndex === table.rows.length - 1, el => el.rounded_b(9))
+        .when(rowIndex > 0, el => el.border_t(stroke).border_color(t.border))
+        .children(row.map((cell, column) => div().flex_1().min_w(0).px(12).py(8).text_size(13)
+          .when(column > 0, el => el.border_l(stroke).border_color(t.border))
+          .when(rowIndex === 0, el => el.font_semibold())
+          .when(table.align[column] === "right", el => el.text_right())
+          .when(table.align[column] === "center", el => el.text_center())
+          .child(this.markdown(`${id}-${rowIndex}-${column}`, cell || " "))))));
   }
 
   // The command or tool running now, with its output so far, as the terminal
@@ -2651,14 +2669,14 @@ export default class Chat extends View {
           .child(entry.files.length===1?this.changeHover(`heading-${entry.key}`,title,entry.files[0],entry.key,t):title)
           .child(div().flex_1()))
         .child(stats(overview.added,overview.removed)))
-      .child(div().id(`diff-toggle-${entry.key}`).flex_none().h(28).px(12).rounded_full().border_1()
+      .child(div().id(`diff-toggle-${entry.key}`).flex_none().h(28).px(12).rounded_full().border(settings().dark ? 1 : 0.5)
         .border_color(settings().dark?t.input:t.border).flex().items_center().justify_center()
         .cursor_pointer().text_size(12).text_color(t.foreground)
         .hover(style=>style.text_color(t.accent)).on_click((_event,cx)=>this.openChanges(entry,cx)).child("View changes"));
-    return v_flex().w_full().min_w(0).rounded(12).border_1().border_color(t.border).overflow_hidden()
+    return v_flex().w_full().min_w(0).rounded(12).border(settings().dark ? 1 : 0.5).border_color(t.border).overflow_hidden()
       .on_size_change((size,cx)=>{this.changeWidths??={};if(this.changeWidths[entry.key]!==size.width){this.changeWidths[entry.key]=size.width;cx.notify();}})
       .child(heading)
-      .when(entry.files.length>1,el=>el.child(v_flex().border_t(1).border_color(t.border)
+      .when(entry.files.length>1,el=>el.child(v_flex().border_t(settings().dark ? 1 : 0.5).border_color(t.border)
         .children(files.map((file,index)=>{
           const id=`${entry.key}-${index}`;
           const row=h_flex().id(`file-${id}`).px(12).py(8).gap(8).items_center()
@@ -2670,7 +2688,7 @@ export default class Chat extends View {
             .child(stats(file.added,file.removed));
           return row;
         }))))
-      .when(entry.files.length>3,el=>el.child(h_flex().id(`more-${entry.key}`).px(12).py(9).gap(8).items_center().border_t(1).border_color(t.border).rounded_b(11).cursor_pointer()
+      .when(entry.files.length>3,el=>el.child(h_flex().id(`more-${entry.key}`).px(12).py(9).gap(8).items_center().border_t(settings().dark ? 1 : 0.5).border_color(t.border).rounded_b(11).cursor_pointer()
         .hover(style=>style.bg(t.hover)).text_size(12.5).on_click((_event,cx)=>this.toggleCard(listKey,cx))
         .child(expanded?"Show fewer files":`Show ${entry.files.length-3} more files`).child(div().child(expanded?"▴":"▾"))));
   }
@@ -3006,8 +3024,8 @@ export default class Chat extends View {
     const icon = (id, text, action, on) => div().id(id).flex_none().size(30).rounded_full().flex().items_center().justify_center()
       .cursor_pointer().text_size(16).text_color(t.muted).when(Boolean(on), (el) => el.bg(t.hover))
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(text);
-    const card = v_flex().w_full().max_w(900).rounded(18).border_1().border_color(this.inputFocused ? t.input : t.border)
-      .bg(t.background).shadow_sm()
+    const card = v_flex().w_full().max_w(900).rounded(18).border(settings().dark ? 1 : 0.5).border_color(this.inputFocused ? t.input : t.border)
+      .bg(settings().dark ? t.background : "#00000000").when(settings().dark, el => el.shadow_sm())
       .when(this.attach.length > 0, (el) => el.child(h_flex().px(12).pt(12).gap(8).flex_wrap().children(this.attach.map((a, n) =>
         div().relative()
           .child(a.image ? this.img(a.image.ref, t, 144, 108) : div().px(10).py(8).rounded(8).bg(t.raised).text_size(11.5).child(a.name))
@@ -3024,7 +3042,7 @@ export default class Chat extends View {
         .on_action("chat_menu_escape", (_e, cx) => this.menuKey({ keystroke: "escape" }, cx))
         .on_action("chat_menu_right", (_e, cx) => this.menuKey({ keystroke: "right" }, cx))
         .on_key_down((e, cx) => this.menuKey(e, cx))
-        .child(Textarea.new(this.input).w_full().px(16).pt(14).pb(6).border_0().bg(t.background).text_size(14).line_height("21px").text_color(t.foreground)
+        .child(Textarea.new(this.input).w_full().px(16).pt(14).pb(6).border_0().bg(settings().dark ? t.background : "#00000000").text_size(14).line_height("21px").text_color(t.foreground)
           .token((tk) => div().px(6).rounded(6).bg(t.selected).text_color(t.accent).font_medium().child(tk.token.label ?? tk.token.text))))
       .when(Boolean(chosen), (el) => el.child(h_flex().px(16).pb(2).gap(8).text_size(11.5).text_color(t.dim)
         .when(Boolean(chosen?.hint), (r) => r.child(div().flex_none().child(chosen.hint)))
