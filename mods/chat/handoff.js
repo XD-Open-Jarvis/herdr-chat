@@ -21,6 +21,8 @@ export class CodexHandoff {
     this.loggedSlot = null;
     this.draining = false;
     this.seeded = false;
+    this.sendAfterEpoch = null;
+    this.steeredAt = null;
   }
 
   /** Seeds retired screen state from a cold-opened idle Codex terminal before follow() runs. */
@@ -39,7 +41,7 @@ export class CodexHandoff {
    * Records any visible screen text as retired on user send so pre-send screen
    * residue can never flash below the newly added optimistic user bubble.
    */
-  noteUserSend() {
+  noteUserSend(codexTurn = null) {
     this.seeded = true;
     if (this.latestSnapshot?.item?.kind === "text") {
       this.retired = {
@@ -52,6 +54,16 @@ export class CodexHandoff {
         text: this.acceptedText,
       };
     }
+    if (codexTurn && (codexTurn.stage === "completed" || (codexTurn.stage === "idle" && (codexTurn.epoch ?? 0) > 0))) {
+      this.sendAfterEpoch = codexTurn.epoch ?? 0;
+      this.steeredAt = null;
+    } else if (codexTurn && ["awaiting_text", "assistant_logged"].includes(codexTurn.stage) && (codexTurn.epoch ?? 0) > 0) {
+      this.sendAfterEpoch = null;
+      this.steeredAt = codexTurn.epoch ?? 0;
+    } else {
+      this.sendAfterEpoch = null;
+      this.steeredAt = null;
+    }
     this.acceptedText = null;
     this.acceptedAssistantCount = 0;
     this.acceptedBlockOrdinal = 0;
@@ -59,6 +71,37 @@ export class CodexHandoff {
     this.drainedSlot = null;
     this.running = null;
     this.draining = false;
+  }
+
+  cancelUserSend() {
+    this.sendAfterEpoch = null;
+    this.steeredAt = null;
+  }
+
+  _effectiveTurn(codexTurn) {
+    if (!codexTurn) return null;
+    const epoch = codexTurn.epoch ?? 0;
+    if (this.sendAfterEpoch !== null) {
+      if (epoch > this.sendAfterEpoch) {
+        this.sendAfterEpoch = null;
+        return codexTurn;
+      }
+      if (codexTurn.stage === "completed" || (codexTurn.stage === "idle" && epoch > 0)) {
+        return { epoch: this.sendAfterEpoch + 1, stage: "awaiting_text", assistantCount: 0 };
+      }
+      this.sendAfterEpoch = null;
+      return codexTurn;
+    }
+    if (this.steeredAt !== null) {
+      if (epoch > this.steeredAt) {
+        this.steeredAt = null;
+        return codexTurn;
+      }
+      if (epoch === this.steeredAt && (codexTurn.stage === "completed" || (codexTurn.stage === "idle" && epoch > 0))) {
+        return { epoch: this.steeredAt + 1, stage: "awaiting_text", assistantCount: 0 };
+      }
+    }
+    return codexTurn;
   }
 
   /** Marks an async Tail drain in progress while holding acceptedText visible. */
@@ -112,8 +155,22 @@ export class CodexHandoff {
   update(snapshot, { codexTurn = null, pendingCount = 0, termStatus = null, hasPriorAssistant = false } = {}) {
     this.seeded = true;
     this.latestSnapshot = snapshot ?? null;
+    const turn = this._effectiveTurn(codexTurn);
 
     if (snapshot?.workedAfterAt) {
+      if (this.draining) {
+        return { streamText: this.acceptedText, running: null, shouldDrainBeforeDrop: false, reason: "worked_draining" };
+      }
+      if (this.acceptedText && turn?.stage !== "completed") {
+        this.drainedSlot = {
+          epoch: this.acceptedEpoch,
+          assistantCount: this.acceptedAssistantCount,
+          text: this.acceptedText,
+          blockOrdinal: this.acceptedBlockOrdinal,
+          promptLine: this.acceptedPromptLine,
+        };
+        return { streamText: this.acceptedText, running: null, shouldDrainBeforeDrop: true, reason: "worked_drain_before_drop" };
+      }
       this.retired = {
         promptLine: snapshot.promptLine ?? null,
         text: snapshot.item?.kind === "text" ? snapshot.item.text : this.acceptedText ?? this.retired?.text ?? null,
@@ -123,7 +180,7 @@ export class CodexHandoff {
       return { streamText: null, running: null, shouldDrainBeforeDrop: false, reason: "worked_on_screen" };
     }
 
-    if (codexTurn?.stage === "completed") {
+    if (turn?.stage === "completed") {
       this.retired = {
         promptLine: snapshot?.promptLine ?? null,
         text: snapshot?.item?.kind === "text" ? snapshot.item.text : this.acceptedText ?? this.retired?.text ?? null,
@@ -133,14 +190,14 @@ export class CodexHandoff {
       return { streamText: null, running: null, shouldDrainBeforeDrop: false, reason: "turn_completed_in_log" };
     }
 
-    if (codexTurn?.stage === "assistant_logged") {
+    if (turn?.stage === "assistant_logged") {
       const sameSlot =
         this.loggedSlot &&
-        this.loggedSlot.epoch === codexTurn.epoch &&
-        this.loggedSlot.assistantCount === codexTurn.assistantCount;
+        this.loggedSlot.epoch === turn.epoch &&
+        this.loggedSlot.assistantCount === turn.assistantCount;
       this.loggedSlot = {
-        epoch: codexTurn.epoch,
-        assistantCount: codexTurn.assistantCount,
+        epoch: turn.epoch,
+        assistantCount: turn.assistantCount,
         text: snapshot?.item?.kind === "text"
           ? snapshot.item.text
           : (sameSlot ? this.loggedSlot?.text : null) ?? this.acceptedText ?? null,
@@ -167,18 +224,18 @@ export class CodexHandoff {
       : this.drainedSlot;
     if (
       priorSlot &&
-      codexTurn &&
-      codexTurn.epoch === priorSlot.epoch &&
-      codexTurn.assistantCount > priorSlot.assistantCount
+      turn &&
+      turn.epoch === priorSlot.epoch &&
+      turn.assistantCount > priorSlot.assistantCount
     ) {
       if (
         !this.loggedSlot ||
-        this.loggedSlot.epoch !== codexTurn.epoch ||
-        this.loggedSlot.assistantCount < codexTurn.assistantCount
+        this.loggedSlot.epoch !== turn.epoch ||
+        this.loggedSlot.assistantCount < turn.assistantCount
       ) {
         this.loggedSlot = {
-          epoch: codexTurn.epoch,
-          assistantCount: codexTurn.assistantCount,
+          epoch: turn.epoch,
+          assistantCount: turn.assistantCount,
           text: priorSlot.text,
           blockOrdinal: priorSlot.blockOrdinal,
           promptLine: priorSlot.promptLine,
@@ -188,9 +245,9 @@ export class CodexHandoff {
       this.drainedSlot = null;
     }
 
-    if (codexTurn && codexTurn.stage === "idle") {
+    if (turn && turn.stage === "idle") {
       const brandNewWorking =
-        codexTurn.epoch === 0 &&
+        turn.epoch === 0 &&
         !hasPriorAssistant &&
         termStatus === "working" &&
         !(pendingCount > 0 && !snapshot?.statusAfterAt);
@@ -219,8 +276,8 @@ export class CodexHandoff {
       // reject the already-logged commentary block if no newer block/post-tool text exists.
       if (
         this.loggedSlot &&
-        codexTurn &&
-        this.loggedSlot.epoch === codexTurn.epoch &&
+        turn &&
+        this.loggedSlot.epoch === turn.epoch &&
         snapshot.item.text === this.loggedSlot.text &&
         snapshot.promptLine !== null &&
         snapshot.blockOrdinal <= this.loggedSlot.blockOrdinal &&
@@ -230,8 +287,8 @@ export class CodexHandoff {
         return { streamText: null, running: this.running, shouldDrainBeforeDrop: false, reason: "stale_logged_slot" };
       }
       this.acceptedText = snapshot.item.text;
-      this.acceptedEpoch = codexTurn?.epoch ?? 0;
-      this.acceptedAssistantCount = codexTurn?.assistantCount ?? 0;
+      this.acceptedEpoch = turn?.epoch ?? 0;
+      this.acceptedAssistantCount = turn?.assistantCount ?? 0;
       this.acceptedBlockOrdinal = snapshot.blockOrdinal ?? 0;
       this.acceptedPromptLine = snapshot.promptLine ?? null;
       this.drainedSlot = null;
@@ -239,11 +296,11 @@ export class CodexHandoff {
       return { streamText: this.acceptedText, running: null, shouldDrainBeforeDrop: false, reason: "live_stream" };
     }
 
-    const epoch = codexTurn?.epoch ?? 0;
+    const epoch = turn?.epoch ?? 0;
     const shouldDrainBeforeDrop =
       Boolean(this.acceptedText) &&
       this.acceptedEpoch === epoch &&
-      codexTurn?.stage === "awaiting_text" &&
+      turn?.stage === "awaiting_text" &&
       !this.draining;
     if (!shouldDrainBeforeDrop && !this.draining) {
       this.acceptedText = null;
@@ -263,10 +320,11 @@ export class CodexHandoff {
    */
   visibleStream(codexTurn) {
     if (!this.acceptedText) return null;
-    if (codexTurn?.stage === "completed" || codexTurn?.stage === "assistant_logged") return null;
-    if (codexTurn && codexTurn.stage === "idle" && codexTurn.epoch > 0) return null;
-    if (codexTurn && this.acceptedEpoch !== codexTurn.epoch && codexTurn.epoch > 0) return null;
-    if (codexTurn && this.acceptedEpoch === codexTurn.epoch && codexTurn.assistantCount > this.acceptedAssistantCount) return null;
+    const turn = this._effectiveTurn(codexTurn);
+    if (turn?.stage === "completed" || turn?.stage === "assistant_logged") return null;
+    if (turn && turn.stage === "idle" && turn.epoch > 0) return null;
+    if (turn && this.acceptedEpoch !== turn.epoch && turn.epoch > 0) return null;
+    if (turn && this.acceptedEpoch === turn.epoch && turn.assistantCount > this.acceptedAssistantCount) return null;
     return this.acceptedText;
   }
 }

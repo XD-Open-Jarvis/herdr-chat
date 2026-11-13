@@ -620,12 +620,22 @@ test("Symptom 3: 80-col wrapped CJK with spaces and Markdown never duplicates be
     "",
     "›",
   ].join("\n");
-  const u4 = handoff.update(liveSnapshot(workedScreen, "codex"), {
-    codexTurn: { epoch: 1, stage: "awaiting_text" }, // even if log lagged behind screen!
+  const workedSnap = liveSnapshot(workedScreen, "codex");
+  const u4 = handoff.update(workedSnap, {
+    codexTurn: { epoch: 1, stage: "awaiting_text" }, // even if log lagged behind screen: drain before dropping!
     termStatus: "idle",
   });
-  assert.equal(u4.streamText, null);
-  assert.equal(u4.reason, "worked_on_screen");
+  assert.equal(u4.streamText, "已定位到原因并完成修复。");
+  assert.equal(u4.shouldDrainBeforeDrop, true);
+  assert.equal(u4.reason, "worked_drain_before_drop");
+  handoff.beginDrain();
+  handoff.endDrain({ keepRun: true });
+  const u5 = handoff.update(workedSnap, {
+    codexTurn: t.codexTurn,
+    termStatus: "idle",
+  });
+  assert.equal(u5.streamText, null);
+  assert.equal(u5.reason, "worked_on_screen");
 });
 
 // --- Claude unchanged check ---
@@ -1388,4 +1398,141 @@ test("body() aligns streaming and running top margins with formal entry spacing 
   // After assistant or tools -> streaming / running-without-streaming gets mt(8)
   assert.deepEqual(measure({ ents: [{ key: "a1", kind: "assistant", text: "part 1" }], streamText: "part 2" }), { streaming: 8 });
   assert.deepEqual(measure({ ents: [{ key: "t1", kind: "tools", items: [] }], streamText: null, running: { title: "Working" } }), { running: 8 });
+});
+
+test("Delayed watchFolder after completed Turn 1 + >15s Turn 2 + workedAfterAt + idle keeps both user and assistant visible without blank gap", async () => {
+  const screens = [
+    [
+      "› second turn after 20s",
+      "",
+      "• Turn 2 live reply streaming",
+      "",
+      "• Working (20s • esc to interrupt)",
+      "",
+      "›",
+    ].join("\n"),
+    [
+      "› second turn after 20s",
+      "",
+      "• Turn 2 live reply streaming",
+      "",
+      "─ Worked for 20s ─────────",
+      "",
+      "›",
+    ].join("\n"),
+  ];
+  let status = "working";
+  let screenIdx = 0;
+  let flushCalls = 0;
+  const snapshots = [];
+
+  const { Chat } = makeChatClass({
+    hc: async (args) => {
+      if (args[0] === "read") return { code: 0, stdout: screens[Math.min(screenIdx, screens.length - 1)], stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+  const { cx, flushTasks } = makeCx();
+  const t = new Transcript("codex");
+  // Completed Turn 1 sitting in t while watchFolder misses Turn 2 startup
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }));
+  t.feed(JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "first turn" }] } }));
+  t.feed(JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Turn 1 answer" }] } }));
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t1" } }));
+  assert.equal(t.codexTurn.epoch, 1);
+  assert.equal(t.codexTurn.stage, "completed");
+
+  let duringWorkedDrain = null;
+  const chat = Object.assign(Object.create(Chat.prototype), {
+    gen: 1,
+    t,
+    pending: [],
+    codexHandoff: new CodexHandoff(),
+    chatVisible: () => true,
+    terminal: () => ({ address: "t1", status }),
+    flushTail: async () => {
+      flushCalls++;
+      // Simulate 1st flush right at Worked for 20s seeing 0 bytes, 100ms follow-up landing Turn 2 in log
+      if (flushCalls === 1) {
+        chat.settle();
+        duringWorkedDrain = {
+          pending: chat.pending.map((m) => m.text),
+          stream: chat.streamShown(),
+        };
+        return 0;
+      }
+      if (flushCalls === 2) {
+        t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t2" } }));
+        t.feed(JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "second turn after 20s" }] } }));
+        t.feed(JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Turn 2 live reply streaming" }] } }));
+        t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t2" } }));
+        return 4;
+      }
+      return 0;
+    },
+  });
+  Object.defineProperty(chat, "term", { value: "t1" });
+
+  // User sent Turn 2 >15s ago while Turn 1 completed in log
+  chat.beforeCodexPending();
+  const p = {
+    id: "p2",
+    text: "second turn after 20s",
+    users: chat.userCount(),
+    at: Date.now() - 20_000,
+    delivering: false,
+    seenWorking: true,
+    minCompletedEpoch: chat.codexMinCompletedEpoch(),
+    idleSince: null,
+  };
+  assert.equal(p.minCompletedEpoch, 2);
+  chat.pending.push(p);
+
+  // Even if terminal briefly goes idle BEFORE follow catches Turn 2, settle() must keep pending for 15s idle grace
+  status = "idle";
+  chat.settle();
+  assert.equal(chat.pending.length, 1);
+  assert.ok(p.idleSince !== null);
+  status = "working";
+  chat.settle();
+  assert.equal(chat.pending.length, 1);
+  assert.equal(p.idleSince, null);
+
+  const recordFrame = () => {
+    chat.settle();
+    const hasTurn2User =
+      chat.pending.some((m) => m.text === "second turn after 20s") ||
+      t.entries.some((e) => e.kind === "user" && e.text === "second turn after 20s");
+    const stream = chat.streamShown();
+    const loggedReplyCount = t.entries.filter((e) => e.kind === "assistant" && e.text === "Turn 2 live reply streaming").length;
+    const hasTurn2Assistant = Boolean(stream === "Turn 2 live reply streaming") || loggedReplyCount > 0;
+    const duplicated = Boolean(stream === "Turn 2 live reply streaming") && loggedReplyCount > 0;
+    snapshots.push({ hasTurn2User, hasTurn2Assistant, duplicated, stream, pending: chat.pending.length, entries: t.entries.length });
+  };
+
+  const origNotify = cx.notify;
+  cx.notify = () => {
+    origNotify();
+    recordFrame();
+    if (snapshots.length === 1) {
+      screenIdx = 1;
+    } else if (snapshots.length >= 2) {
+      status = "idle";
+    }
+  };
+
+  chat.follow("codex", cx);
+  await flushTasks();
+  recordFrame();
+
+  assert.deepEqual(duringWorkedDrain, { pending: ["second turn after 20s"], stream: "Turn 2 live reply streaming" });
+  assert.ok(flushCalls >= 2, `expected follow-up flushTail after workedAfterAt, got ${flushCalls}`);
+  assert.ok(snapshots.length >= 2);
+  for (const [i, s] of snapshots.entries()) {
+    assert.equal(s.hasTurn2User, true, `frame ${i} dropped Turn 2 user message: ${JSON.stringify(s)}`);
+    assert.equal(s.hasTurn2Assistant, true, `frame ${i} dropped Turn 2 assistant reply: ${JSON.stringify(s)}`);
+    assert.equal(s.duplicated, false, `frame ${i} duplicated Turn 2 assistant reply: ${JSON.stringify(s)}`);
+  }
+  assert.equal(snapshots.at(-1).pending, 0);
+  assert.equal(snapshots.at(-1).stream, null);
 });
