@@ -1114,3 +1114,84 @@ test("HandoffTracer writes monotonic JSONL events and deduplicates high-frequenc
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("body() aligns streaming and running top margins with formal entry spacing (0 / 8 / 18)", () => {
+  const makeEl = (tag) => {
+    const node = { tag, id: null, mtVal: null, children: [] };
+    const proxy = new Proxy(node, {
+      get(target, prop) {
+        if (prop === "__node") return target;
+        if (prop === "id") return (v) => { target.id = v; return proxy; };
+        if (prop === "mt") return (v) => { target.mtVal = v; return proxy; };
+        if (prop === "child") return (c) => { if (c != null) target.children.push(c?.__node ?? c); return proxy; };
+        if (prop === "children") return (cs) => { for (const c of cs ?? []) if (c != null) target.children.push(c?.__node ?? c); return proxy; };
+        if (prop === "when") return (cond, fn) => { if (cond) fn(proxy); return proxy; };
+        return (..._args) => proxy;
+      },
+    });
+    return proxy;
+  };
+  const { Chat } = makeChatClass({
+    div: () => makeEl("div"),
+    v_flex: () => makeEl("v_flex"),
+    h_flex: () => makeEl("h_flex"),
+  });
+
+  const findContent = (node) => {
+    if (!node || typeof node !== "object") return null;
+    if (node.id === "content") return node;
+    for (const c of node.children ?? []) {
+      const hit = findContent(c);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const measure = ({ ents = [], pending = [], streamText = null, running = null }) => {
+    const chat = new Chat();
+    chat.width = 900;
+    chat.viewH = 600;
+    chat.contentH = 0;
+    chat.off = 0;
+    chat.limit = 50;
+    chat.t = { kind: "codex" };
+    chat.pending = pending;
+    chat.running = running;
+    chat.settle = () => {};
+    chat.shown = () => ({ start: 0, ents });
+    chat.streamShown = () => streamText;
+    chat.terminal = () => ({ id: "term/1", status: "working" });
+    chat.entry = (e) => ({ kind: "entry", key: e.key });
+    chat.queued = (_m, i) => ({ kind: "queued", index: i });
+    chat.runningView = () => ({ kind: "running" });
+
+    const root = chat.body({ surface: "#f8f8f8", hover: "#eee", muted: "#666", border: "#ddd", popover: "#fff", foreground: "#000" });
+    const content = findContent(root.__node);
+    assert.ok(content, "expected content node");
+    const margins = {};
+    for (const child of content.children) {
+      const inner = child.children?.[0];
+      if (inner?.kind === "entry" && inner.key === "streaming") margins.streaming = child.mtVal;
+      if (inner?.kind === "running") margins.running = child.mtVal;
+    }
+    return margins;
+  };
+
+  // Empty rendered list -> first item gets mt(0), running after streaming gets mt(8)
+  assert.deepEqual(measure({ ents: [], streamText: "hi", running: { title: "Working" } }), { streaming: 0, running: 8 });
+  assert.deepEqual(measure({ ents: [], streamText: null, running: { title: "Working" } }), { running: 0 });
+
+  // After user -> streaming / running-without-streaming gets mt(18)
+  const userEnt = [{ key: "u1", kind: "user", text: "hello" }];
+  assert.deepEqual(measure({ ents: userEnt, streamText: "hi", running: { title: "Working" } }), { streaming: 18, running: 8 });
+  assert.deepEqual(measure({ ents: userEnt, streamText: null, running: { title: "Working" } }), { running: 18 });
+
+  // After pending -> streaming / running-without-streaming gets mt(18)
+  const pending = [{ text: "queued", id: "p1", afterKey: "a1" }];
+  assert.deepEqual(measure({ ents: [{ key: "a1", kind: "assistant", text: "prev" }], pending, streamText: "hi", running: { title: "Working" } }), { streaming: 18, running: 8 });
+  assert.deepEqual(measure({ ents: [{ key: "a1", kind: "assistant", text: "prev" }], pending, streamText: null, running: { title: "Working" } }), { running: 18 });
+
+  // After assistant or tools -> streaming / running-without-streaming gets mt(8)
+  assert.deepEqual(measure({ ents: [{ key: "a1", kind: "assistant", text: "part 1" }], streamText: "part 2" }), { streaming: 8 });
+  assert.deepEqual(measure({ ents: [{ key: "t1", kind: "tools", items: [] }], streamText: null, running: { title: "Working" } }), { running: 8 });
+});

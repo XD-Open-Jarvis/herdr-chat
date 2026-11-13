@@ -2873,9 +2873,9 @@ export default class Chat extends View {
     this.settle();
     const { start, ents } = this.shown();
     const shown = ents.slice(start);
+    const streamText = this.streamShown();
     if (this.tracer?.isEnabled() && (this.t?.kind ?? agentKind(this.terminal())) === "codex") {
       const tail = shown.slice(-3).map((e) => `${e.key}:${e.kind}:${e.text?.length ?? e.items?.length ?? 0}`).join(",");
-      const streamText = this.streamShown();
       const pendingSig = this.pending.map((p) => `${p.delivering ? 1 : 0}:${p.seenWorking ? 1 : 0}:${p.text?.length ?? 0}`).join(",");
       const sig = `${tail}|s:${streamText?.length ?? 0}|r:${this.running?.title ?? ""}|p:${pendingSig}|st:${this.t?.codexTurn?.stage ?? ""}:${this.t?.codexTurn?.epoch ?? 0}`;
       this.tracer.record("render_sig", {
@@ -2892,6 +2892,10 @@ export default class Chat extends View {
       const reply = shown.slice(0, index).reverse().find(entry => entry.kind === "assistant" || entry.kind === "user");
       if (reply?.kind === "assistant") { copyAtChange.set(shown[index].key, reply); deferCopy.add(reply.key); }
     }
+    const rendered = withPending(shown, this.pending);
+    const lastRendered = rendered.at(-1);
+    const streamMt = !lastRendered ? 0 : ["assistant", "tools"].includes(lastRendered.kind) ? 8 : 18;
+    const runMt = streamText ? 8 : streamMt;
     const anchorCard = this.anchorCard;
     this.anchorCard = false;
     // The conversation sits in a centered column as wide as the message card.
@@ -2916,7 +2920,7 @@ export default class Chat extends View {
         .child(div().id("load-earlier-history").px(10).py(4).rounded(8).cursor_pointer().bg(t.surface).text_size(12).text_color(t.muted)
           .hover(style => style.bg(t.hover)).on_click((_e, cx) => this.loadEarlier(cx))
           .child(this.historyLoading ? "Loading earlier history…" : "Load earlier history"))))
-      .children(withPending(shown, this.pending).map((entry, index, entries) => {
+      .children(rendered.map((entry, index, entries) => {
         const previous = entries[index - 1];
         const tight = previous && ((["assistant", "tools"].includes(previous.kind) && ["assistant", "tools"].includes(entry.kind)) || entry.kind === "changes");
         const completed = entry.kind === "notice" && entry.event === "completed";
@@ -2929,8 +2933,8 @@ export default class Chat extends View {
             : this.entry(entry, t, index === entries.length - 1,
               deferCopy.has(entry.key) ? "changes" : entries[index + 1]?.kind));
       }))
-      .when(Boolean(this.streamShown()), (el) => el.child(v_flex().w_full().mt(8).child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true))))
-      .when(Boolean(this.running), (el) => el.child(v_flex().w_full().mt(8).child(this.runningView(t))))
+      .when(Boolean(streamText), (el) => el.child(v_flex().w_full().mt(streamMt).child(this.entry({ kind: "assistant", text: streamText, key: "streaming" }, t, true))))
+      .when(Boolean(this.running), (el) => el.child(v_flex().w_full().mt(runMt).child(this.runningView(t))))
 ;
 
     const scroll = div().id("scroll").relative().flex_1().min_h(0).overflow_hidden()
