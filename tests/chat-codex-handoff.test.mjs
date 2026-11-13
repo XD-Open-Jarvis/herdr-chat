@@ -241,6 +241,7 @@ test("Transcript.codexTurn tracks epochs, commentary/final_answer, tool calls, m
     epoch: 0,
     turnId: null,
     stage: "idle",
+    turnStarted: false,
     userCount: 0,
     assistantCount: 0,
     toolCount: 0,
@@ -887,6 +888,185 @@ test("ensureFollow('codex') called during exit flushTail starts a fresh follow l
   t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t2", duration_ms: 100 } }));
   await flushTasks();
   assert.equal(chat.streamLoop, null);
+});
+
+test("Transcript.codexTurn does not double-increment epoch when user message precedes task_started", () => {
+  const t = new Transcript("codex");
+
+  // Turn 1: user item written before task_started while idle
+  t.feed(JSON.stringify({
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "first" }] },
+  }));
+  assert.equal(t.codexTurn.epoch, 1);
+  assert.equal(t.codexTurn.stage, "awaiting_text");
+  assert.equal(t.codexTurn.turnStarted, false);
+
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }));
+  assert.equal(t.codexTurn.epoch, 1);
+  assert.equal(t.codexTurn.turnId, "t1");
+  assert.equal(t.codexTurn.stage, "awaiting_text");
+  assert.equal(t.codexTurn.turnStarted, true);
+
+  t.feed(JSON.stringify({
+    type: "response_item",
+    payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "ok 1" }] },
+  }));
+  assert.equal(t.codexTurn.stage, "completed");
+  assert.equal(t.codexTurn.turnStarted, false);
+
+  // Turn 2: user item written before task_started while completed
+  t.feed(JSON.stringify({
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+  }));
+  assert.equal(t.codexTurn.epoch, 2);
+  assert.equal(t.codexTurn.turnStarted, false);
+  assert.equal(t.codexTurn.assistantCount, 0);
+
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t2" } }));
+  assert.equal(t.codexTurn.epoch, 2);
+  assert.equal(t.codexTurn.turnId, "t2");
+  assert.equal(t.codexTurn.turnStarted, true);
+
+  // Abort resets turnStarted
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "turn_aborted", turn_id: "t2" } }));
+  assert.equal(t.codexTurn.stage, "completed");
+  assert.equal(t.codexTurn.turnStarted, false);
+
+  // Turn 3: task_started arrives first, then user
+  t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t3" } }));
+  assert.equal(t.codexTurn.epoch, 3);
+  assert.equal(t.codexTurn.turnStarted, true);
+  t.feed(JSON.stringify({
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "third" }] },
+  }));
+  assert.equal(t.codexTurn.epoch, 3);
+  assert.equal(t.codexTurn.turnStarted, true);
+});
+
+test("Cold-opened idle Codex Chat seeds retired screen via start() so external hc/TUI send never flashes <1s prior reply", async () => {
+  // 1. Direct CodexHandoff.seedIdleScreen() unit check
+  const direct = new CodexHandoff();
+  assert.equal(direct.seeded, false);
+  const oldScreen = [
+    "› Question 1",
+    "",
+    "• Old Reply 1",
+    "",
+    "›",
+  ].join("\n");
+  direct.seedIdleScreen(liveSnapshot(oldScreen, "codex"));
+  assert.equal(direct.seeded, true);
+  assert.deepEqual(direct.retired, { promptLine: "› Question 1", text: "Old Reply 1" });
+
+  // Turn 2 starts externally before › Question 2 renders on screen
+  const staleRes = direct.update(liveSnapshot(oldScreen, "codex"), {
+    codexTurn: { epoch: 2, stage: "awaiting_text", assistantCount: 0, toolCount: 0 },
+    termStatus: "working",
+  });
+  assert.equal(staleRes.streamText, null);
+  assert.equal(staleRes.reason, "stale_prior_turn");
+
+  // 2. Full Chat.prototype.start() -> external send -> follow() integration check
+  let status = "idle";
+  let screen = oldScreen;
+  let folderNotify = null;
+
+  class FakeTail {
+    constructor() {
+      this.offset = 0;
+      this.truncated = false;
+    }
+    async read() {
+      return [];
+    }
+  }
+
+  const { Chat } = makeChatClass({
+    Tail: FakeTail,
+    inheritedHistory: async () => ({
+      offset: 100,
+      truncated: false,
+      lines: [
+        JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t1" } }),
+        JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Question 1" }] } }),
+        JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Old Reply 1" }] } }),
+        JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t1", duration_ms: 400 } }),
+      ],
+    }),
+    watchFolder: () => {},
+    folderPoll: () => () => new Promise((r) => { folderNotify = r; }),
+    sleep: () => new Promise((r) => setTimeout(r, 5)),
+    hc: async (args) => {
+      if (args[0] === "read") return { code: 0, stdout: screen, stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  const chat = new Chat();
+  const { cx } = makeCx();
+  Object.assign(chat, {
+    gen: 0,
+    pending: [],
+    stream: null,
+    running: null,
+    streamLoop: null,
+    file: null,
+    historyTail: null,
+    activeTail: null,
+    limit: 80,
+    off: 0,
+    historyBytes: 4 * 1024 * 1024,
+    truncated: false,
+    historyLoading: false,
+    error: null,
+    grew: false,
+    codexHandoff: new CodexHandoff(),
+    tracer: new HandoffTracer({ isEnabled: () => false }),
+    terminal: () => ({ id: "t1", status, kind: "codex" }),
+    chatVisible: () => true,
+    cacheShown: () => {},
+    recordTrace: () => {},
+    settle: () => {},
+    ack: () => {},
+    nameSpace: () => {},
+    flushTail: async () => 0,
+  });
+  Object.defineProperty(chat, "term", { value: "t1" });
+
+  chat.start("/tmp/codex.jsonl", null, "codex", cx);
+  for (let i = 0; i < 40 && !chat.codexHandoff.seeded; i++) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(chat.codexHandoff.seeded, true);
+  assert.deepEqual(chat.codexHandoff.retired, { promptLine: "› Question 1", text: "Old Reply 1" });
+
+  // External hc/TUI send: task_started lands before › Question 2 paints on PTY
+  chat.t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_started", turn_id: "t2" } }));
+  status = "working";
+  chat.ensureFollow("codex", cx, 1800);
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(chat.streamShown(), null);
+
+  // Once Turn 2 prompt + new reply render, streamShown() exposes the new reply
+  screen = [
+    "› Question 2",
+    "",
+    "• New Reply 2",
+    "",
+    "›",
+  ].join("\n");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(chat.streamShown(), "New Reply 2");
+
+  // Shut down background loops cleanly
+  status = "idle";
+  chat.t.feed(JSON.stringify({ type: "event_msg", payload: { type: "task_complete", turn_id: "t2", duration_ms: 200 } }));
+  chat.gen++;
+  folderNotify?.();
+  await new Promise((r) => setTimeout(r, 20));
 });
 
 // --- HandoffTracer: monotonic JSONL, deduplication, disabled no-op ---

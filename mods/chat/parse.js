@@ -163,6 +163,7 @@ export class Transcript {
         epoch: 0,
         turnId: null,
         stage: "idle",
+        turnStarted: false,
         userCount: 0,
         assistantCount: 0,
         toolCount: 0,
@@ -245,6 +246,7 @@ export class Transcript {
       this.codexTurn.userCount++;
       if (this.codexTurn.stage === "idle" || this.codexTurn.stage === "completed") {
         this.codexTurn.epoch++;
+        this.codexTurn.turnStarted = false;
         this.codexTurn.assistantCount = 0;
         this.codexTurn.toolCount = 0;
         this.codexTurn.lastAssistantKey = null;
@@ -448,12 +450,19 @@ export class Transcript {
       this.turnId = p.turn_id ?? p.root_turn_id ?? null;
       this.issue = null;
       if (this.codexTurn) {
-        this.codexTurn.epoch++;
-        this.codexTurn.turnId = this.turnId;
-        this.codexTurn.stage = "awaiting_text";
-        this.codexTurn.assistantCount = 0;
-        this.codexTurn.toolCount = 0;
-        this.codexTurn.lastAssistantKey = null;
+        const ct = this.codexTurn;
+        if (ct.stage === "awaiting_text" && !ct.turnStarted && ct.assistantCount === 0 && ct.toolCount === 0) {
+          ct.turnId = this.turnId;
+          ct.turnStarted = true;
+        } else {
+          ct.epoch++;
+          ct.turnId = this.turnId;
+          ct.stage = "awaiting_text";
+          ct.turnStarted = true;
+          ct.assistantCount = 0;
+          ct.toolCount = 0;
+          ct.lastAssistantKey = null;
+        }
       }
       return;
     }
@@ -474,14 +483,20 @@ export class Transcript {
       return;
     }
     if (d.type === "event_msg" && p.type === "task_complete") {
-      if (this.codexTurn) this.codexTurn.stage = "completed";
+      if (this.codexTurn) {
+        this.codexTurn.stage = "completed";
+        this.codexTurn.turnStarted = false;
+      }
       if (p.error) this.agentError(p.error, d.timestamp, p.turn_id ?? p.root_turn_id ?? this.turnId);
       const duration = p.duration_ms ?? (Number.isFinite(p.started_at) && Number.isFinite(p.completed_at)
         ? (p.completed_at - p.started_at) * 1000 : null);
       return this.completed(duration, d.timestamp, p.turn_id ?? p.root_turn_id ?? d.timestamp);
     }
     if (d.type === "event_msg" && p.type === "turn_aborted") {
-      if (this.codexTurn) this.codexTurn.stage = "completed";
+      if (this.codexTurn) {
+        this.codexTurn.stage = "completed";
+        this.codexTurn.turnStarted = false;
+      }
       return this.note("Interrupted");
     }
     // Codex's running totals: tokens, how full the context is, and its limits.
@@ -501,7 +516,12 @@ export class Transcript {
         if (this.codexTurn) {
           this.codexTurn.assistantCount++;
           this.codexTurn.lastAssistantKey = this.last()?.key ?? null;
-          this.codexTurn.stage = p.phase === "final_answer" ? "completed" : "assistant_logged";
+          if (p.phase === "final_answer") {
+            this.codexTurn.stage = "completed";
+            this.codexTurn.turnStarted = false;
+          } else {
+            this.codexTurn.stage = "assistant_logged";
+          }
         }
         return;
       }

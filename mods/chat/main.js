@@ -1689,6 +1689,13 @@ export default class Chat extends View {
         this.historyLoading = false;
         this.grew = true;
         if (this.chatVisible()) { this.cacheShown(cx); cx.notify(); }
+        if (!previous && kind === "codex" && this.term && this.terminal()?.status !== "working" && !this.codexHandoff?.seeded) {
+          const term = this.term;
+          Promise.resolve(hc(["read", term, "--lines", "80"])).then((r) => {
+            if (gen !== this.gen || this.term !== term || this.terminal()?.status === "working" || this.codexHandoff?.seeded) return;
+            if (r?.stdout != null) this.codexHandoff?.seedIdleScreen(liveSnapshot(r.stdout, "codex"));
+          }).catch(() => {});
+        }
       } catch (error) {
         if (gen !== this.gen) return;
         this.historyLoading = false;

@@ -20,6 +20,19 @@ export class CodexHandoff {
     this.retired = null;
     this.loggedSlot = null;
     this.draining = false;
+    this.seeded = false;
+  }
+
+  /** Seeds retired screen state from a cold-opened idle Codex terminal before follow() runs. */
+  seedIdleScreen(snapshot) {
+    this.seeded = true;
+    this.latestSnapshot = snapshot ?? null;
+    if (snapshot?.item?.kind === "text") {
+      this.retired = {
+        promptLine: snapshot.promptLine ?? null,
+        text: snapshot.item.text,
+      };
+    }
   }
 
   /**
@@ -27,6 +40,7 @@ export class CodexHandoff {
    * residue can never flash below the newly added optimistic user bubble.
    */
   noteUserSend() {
+    this.seeded = true;
     if (this.latestSnapshot?.item?.kind === "text") {
       this.retired = {
         promptLine: this.latestSnapshot.promptLine ?? null,
@@ -70,6 +84,7 @@ export class CodexHandoff {
 
   /** Retires any remaining screen text and clears active stream state on loop exit. */
   finishFollow() {
+    this.seeded = true;
     if (this.latestSnapshot?.item?.kind === "text") {
       this.retired = {
         promptLine: this.latestSnapshot.promptLine ?? null,
@@ -95,6 +110,7 @@ export class CodexHandoff {
    * Returns { streamText, running, shouldDrainBeforeDrop, reason }.
    */
   update(snapshot, { codexTurn = null, pendingCount = 0, termStatus = null, hasPriorAssistant = false } = {}) {
+    this.seeded = true;
     this.latestSnapshot = snapshot ?? null;
 
     if (snapshot?.workedAfterAt) {
