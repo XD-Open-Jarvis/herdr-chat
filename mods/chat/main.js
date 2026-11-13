@@ -359,17 +359,13 @@ export default class Chat extends View {
         // Between steps the screen can show nothing new, or only text the chat
         // already has: keep the last command's card rather than drop it and
         // bring one back (the page would jump). New reply text replaces it.
-        const fresh = text && !this.logged(text) && !this.previousReplyOnScreen(text);
+        const fresh = text && !this.logged(text);
         const run = now?.kind === "run" ? now : fresh ? null : this.running;
-        // A blank/intermediate terminal frame must not erase a reply before
-        // the session log has recorded the complete text.
-        const stream = fresh ? text : this.stream;
-        if (fresh) this.streamUsers = this.userCount();
-        if (stream !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = stream; this.running = run; cx.notify(); }
+        if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
         await exec("sh", ["-c", "sleep 0.35"]);
       }
       if (this.streamLoop === loop) this.streamLoop = null;
-      if (this.stream && this.logged(this.stream)) this.stream = null;
+      this.stream = null;
       this.running = null;
       if (this.chatVisible()) cx.notify();
     });
@@ -479,45 +475,20 @@ export default class Chat extends View {
   // Whether the log already has this reply text (in this turn).
   logged(text) {
     const norm = (x) => (x ?? "").replace(/[\s*_`#>]+/g, " ").trim();
-    const n = norm(text);
-    if (!n) return false;
+    // The start or the end: a long reply can be partly off the terminal's screen.
+    const n = norm(text), head = n.slice(0, 80), tail = n.slice(-80);
     const ents = this.t?.entries ?? [];
     for (let i = ents.length - 1; i >= 0 && ents[i].kind !== "user"; i--) {
       if (ents[i].kind !== "assistant") continue;
       const e = norm(ents[i].text);
-      // A matching prefix alone does not mean the rest of the live reply is
-      // present in the log yet.
-      if (e.includes(n)) return true;
+      if (e.includes(head) || e.includes(tail)) return true;
     }
     return false;
   }
 
-  previousReplyOnScreen(text) {
-    if (!text) return false;
-    const norm = (x) => x.replace(/[\s*_`#>]+/g, " ").trim();
-    const current = norm(text);
-    if (current.length < 20) return false;
-    const entries = this.t?.entries ?? [];
-    const latestUser = entries.findLastIndex(entry => entry.kind === "user");
-    const olderReplies = (latestUser < 0 ? [] : entries.slice(0, latestUser)).filter(entry => entry.kind === "assistant").slice(-5);
-    if (this.previousReply) olderReplies.push({ text: this.previousReply });
-    return olderReplies.some(entry => {
-      const previous = norm(entry.text ?? "");
-      return previous.includes(current) || (current.length >= 80 && previous.includes(current.slice(0, 80)) && previous.includes(current.slice(-80)));
-    });
-  }
-
-  markNewInput() {
-    this.previousReply = [...(this.t?.entries ?? [])].reverse().find(entry => entry.kind === "assistant")?.text ?? this.stream;
-    this.stream = null;
-    this.running = null;
-    this.t?.markInput();
-  }
-
   // The streamed reply, unless the log already has it.
   streamShown() {
-    return this.pending.length === 0 && this.stream && this.streamUsers === this.userCount()
-      && !this.logged(this.stream) && !this.previousReplyOnScreen(this.stream) ? this.stream : null;
+    return this.stream && !this.logged(this.stream) ? this.stream : null;
   }
 
   // How often each command was sent here: the menu puts those first.
@@ -1505,7 +1476,7 @@ export default class Chat extends View {
     const pending = { ...item, files: item.paths.length, users: this.userCount(),
       afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now(), delivering: true };
     this.pending.push(pending);
-    this.markNewInput();
+    this.t?.markInput();
     cx.notify();
     cx.spawn(async cx => {
       let error = null, paused = false;
@@ -1783,7 +1754,7 @@ export default class Chat extends View {
     if (!/^[\/!]/.test(text)) {
       this.pending.push({ text, files: files.length, attachments, users: this.userCount(),
         afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now() });
-      this.markNewInput();
+      this.t?.markInput();
     }
     this.stream = null; this.running = null;
     cx.spawn(async (cx) => this.deliver(text, files, cx));
@@ -2544,13 +2515,6 @@ export default class Chat extends View {
     this.settle();
     const { start, ents } = this.shown();
     const shown = ents.slice(start);
-    const liveText = this.streamShown();
-    const lastUser = shown.findLastIndex(entry => entry.kind === "user");
-    const lastReply = shown.findLastIndex((entry, index) => index > lastUser && entry.kind === "assistant");
-    const normalized = text => (text ?? "").replace(/[\s*_`#>]+/g, " ").trim();
-    const loggedReply = lastReply >= 0 ? normalized(shown[lastReply].text) : "";
-    const liveReply = normalized(liveText);
-    const overlayReply = Boolean(loggedReply && liveReply.startsWith(loggedReply) && liveReply.length > loggedReply.length);
     const anchorCard = this.anchorCard;
     this.anchorCard = false;
     // The conversation sits in a centered column as wide as the message card.
@@ -2578,11 +2542,10 @@ export default class Chat extends View {
       .children(withPending(shown, this.pending).map((entry, index, entries) => {
         const previous = entries[index - 1];
         const tight = previous && ((["assistant", "tools"].includes(previous.kind) && ["assistant", "tools"].includes(entry.kind)) || entry.kind === "changes");
-        if (overlayReply && entry === shown[lastReply]) entry = { ...entry, text: liveText };
         return v_flex().w_full().mt(index ? tight ? 8 : 18 : 0).child(entry.kind === "pending"
           ? this.queued(entry.message, entry.index, t) : this.entry(entry, t, index === entries.length - 1, entries[index + 1]?.kind));
       }))
-      .when(Boolean(liveText) && !overlayReply, (el) => el.child(v_flex().w_full().mt(8).child(this.entry({ kind: "assistant", text: liveText, key: "streaming" }, t, true))))
+      .when(Boolean(this.streamShown()), (el) => el.child(v_flex().w_full().mt(8).child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true))))
       .when(Boolean(this.running), (el) => el.child(v_flex().w_full().mt(8).child(this.runningView(t))))
 ;
 
