@@ -192,11 +192,10 @@ export default class Chat extends View {
     this.t = null;
     this.activeTail = null;
     this.codexHandoff = new CodexHandoff();
-    this.traceFileFlag = false;
-    this.traceFileCheckedAt = 0;
     this.tracer = new HandoffTracer({
+      dir: () => `${appHome()}/traces`,
       getId: () => this.terminalId || localId(this.term) || "chat",
-      isEnabled: () => Boolean(shared("chat.trace")) || localStorage.getItem("chat.trace") === "1" || Boolean(this.traceFileFlag),
+      isEnabled: () => Boolean(shared("chat.trace")) || localStorage.getItem("chat.trace") === "1",
     });
     this.limit = PAGE;
     this.open = new Set();
@@ -1405,17 +1404,6 @@ export default class Chat extends View {
     }
     const kind = agentKind(term);
     if (kind === "codex") {
-      const now = Date.now();
-      if (now - (this.traceFileCheckedAt ?? 0) >= 2000) {
-        this.traceFileCheckedAt = now;
-        const fsAny = /** @type {{ exists?: (p: string) => Promise<boolean>, access?: (p: string) => Promise<void> }} */ (/** @type {unknown} */ (fs));
-        const probe = typeof fsAny.exists === "function"
-          ? fsAny.exists("/tmp/herdr-chat-trace.on")
-          : typeof fsAny.access === "function"
-            ? fsAny.access("/tmp/herdr-chat-trace.on").then(() => true, () => false)
-            : Promise.resolve(false);
-        Promise.resolve(probe).then((on) => { this.traceFileFlag = Boolean(on); }).catch(() => { this.traceFileFlag = false; });
-      }
       if (this.pending?.length && ["working", "blocked"].includes(term?.status)) {
         for (const p of this.pending) if (!p.delivering) p.seenWorking = true;
       }
@@ -1691,10 +1679,13 @@ export default class Chat extends View {
         if (this.chatVisible()) { this.cacheShown(cx); cx.notify(); }
         if (!previous && kind === "codex" && this.term && this.terminal()?.status !== "working" && !this.codexHandoff?.seeded) {
           const term = this.term;
-          Promise.resolve(hc(["read", term, "--lines", "80"])).then((r) => {
-            if (gen !== this.gen || this.term !== term || this.terminal()?.status === "working" || this.codexHandoff?.seeded) return;
-            if (r?.stdout != null) this.codexHandoff?.seedIdleScreen(liveSnapshot(r.stdout, "codex"));
-          }).catch(() => {});
+          cx.spawn(async () => {
+            try {
+              const r = await hc(["read", term, "--lines", "80"]);
+              if (gen !== this.gen || this.term !== term || this.terminal()?.status === "working" || this.codexHandoff?.seeded) return;
+              if (r?.stdout != null) this.codexHandoff?.seedIdleScreen(liveSnapshot(r.stdout, "codex"));
+            } catch {}
+          });
         }
       } catch (error) {
         if (gen !== this.gen) return;

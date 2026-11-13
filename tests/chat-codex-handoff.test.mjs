@@ -1110,8 +1110,202 @@ test("HandoffTracer writes monotonic JSONL events and deduplicates high-frequenc
       assert.ok(Date.parse(lines[i].ts) > 0);
       if (i > 0) assert.ok(lines[i].t_ms >= lines[i - 1].t_ms);
     }
+
+    // Function `dir: () => ...` + parent `mkdir` for nested non-existent directory
+    let dynamicDir = join(dir, "nested", "traces");
+    const dynamicTracer = new HandoffTracer({
+      id: "dyn-1",
+      dir: () => dynamicDir,
+      isEnabled: () => true,
+    });
+    dynamicTracer.record("send", { len: 3 });
+    await dynamicTracer.flush();
+    assert.equal(dynamicTracer.path(), join(dynamicDir, "herdr-codex-handoff-dyn-1.jsonl"));
+    assert.equal(existsSync(dynamicTracer.path()), true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("GPUI capability sandbox: Chat.init() + check(cx) never probes /tmp and resolves Codex session without hanging on Loading conversation…", async () => {
+  const { mkdirSync, promises: nodeFs } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "gpui-sandbox-"));
+  const homeDir = join(root, "home");
+  const appHomeDir = join(homeDir, ".config", "herdr-app");
+  const sessionFile = join(homeDir, ".codex", "sessions", "2026", "11", "13", "rollout-11111111-1111-1111-1111-111111111111.jsonl");
+  mkdirSync(join(homeDir, ".codex", "sessions", "2026", "11", "13"), { recursive: true });
+  mkdirSync(appHomeDir, { recursive: true });
+
+  try {
+    await nodeFs.writeFile(
+      sessionFile,
+      JSON.stringify({ timestamp: "2026-11-13T00:00:00Z", type: "session_meta", payload: { id: "11111111-1111-1111-1111-111111111111", cwd: homeDir } }) + "\n",
+    );
+
+    const assertCanRead = (p) => {
+      if (!String(p).startsWith(homeDir)) {
+        throw new Error(`cannot read '${p}'; add its directory to capabilities.fs.read in the manifest`);
+      }
+    };
+    const assertCanWrite = (p) => {
+      if (!String(p).startsWith(appHomeDir)) {
+        throw new Error(`cannot write '${p}'; add its directory to capabilities.fs.write in the manifest`);
+      }
+    };
+    const sandboxFs = {
+      exists(p) {
+        assertCanRead(p);
+        return Promise.resolve(existsSync(p));
+      },
+      readFile(p, enc) {
+        assertCanRead(p);
+        return nodeFs.readFile(p, enc);
+      },
+      writeFile(p, d) {
+        assertCanWrite(p);
+        return nodeFs.writeFile(p, d);
+      },
+      mkdir(p, opts) {
+        assertCanWrite(p);
+        return nodeFs.mkdir(p, opts);
+      },
+    };
+
+    const { ChatAttention } = await loadMod("../mods/chat/attention.js");
+    const { IdentifyFeedback, identifyKey } = await loadMod("../mods/chat/identify.js");
+    const { ownerPane, qualifyAddress } = await loadMod("../mods/chat/identity.js");
+    const { bindingKey, chooseBinding } = await loadMod("../mods/chat/binding.js");
+    const { sidebarVisible } = await loadMod("../mods/chat/hover-diff.js");
+
+    const makeEl = (tag) => {
+      const node = { tag, textChildren: [], children: [] };
+      const proxy = new Proxy(node, {
+        get(target, prop) {
+          if (prop === "__node") return target;
+          if (prop === "child") return (c) => {
+            if (typeof c === "string") target.textChildren.push(c);
+            else if (c != null) target.children.push(c?.__node ?? c);
+            return proxy;
+          };
+          if (prop === "children") return (cs) => {
+            for (const c of cs ?? []) {
+              if (typeof c === "string") target.textChildren.push(c);
+              else if (c != null) target.children.push(c?.__node ?? c);
+            }
+            return proxy;
+          };
+          if (prop === "when") return (cond, fn) => { if (cond) fn(proxy); return proxy; };
+          return (..._args) => proxy;
+        },
+      });
+      return proxy;
+    };
+    const collectTexts = (node, out = []) => {
+      if (!node || typeof node !== "object") return out;
+      for (const s of node.textChildren ?? []) out.push(s);
+      for (const c of node.children ?? []) collectTexts(c, out);
+      return out;
+    };
+
+    for (const traceEnabled of [false, true]) {
+      const sharedState = new Map([["chat.trace", traceEnabled]]);
+      const termObj = {
+        address: "t1h",
+        status: "idle",
+        state: "live",
+        cwd: homeDir,
+        foreground: { name: "codex", pid: 4242 },
+      };
+      const fakeState = () => ({
+        set_auto_grow() {},
+        on() {},
+        focus() {},
+        value: () => "",
+        content: () => ({ tokens: [] }),
+        set_value() {},
+      });
+      const { Chat } = makeChatClass({
+        fs: sandboxFs,
+        home: () => homeDir,
+        appHome: () => appHomeDir,
+        shared: (k) => (sharedState.has(k) ? sharedState.get(k) : null),
+        setShared: (k, v) => sharedState.set(k, v),
+        props: () => ({ terminal: "t1h", owner_tab: "tab-1", owner_pane: "pane-1" }),
+        terminals: () => [termObj],
+        panes: () => [{ pane: "pane-1", tab: "tab-1", mod: "chat", active: true }],
+        spaces: () => [{ id: "sp-1", active: true, tabs: [{ id: "tab-1", active: true, panes: [{ id: "pane-1", active: true }] }] }],
+        away: () => false,
+        ownerPane,
+        qualifyAddress,
+        presentationPane: () => null,
+        presentationVisible: () => true,
+        presentationLayoutReady: () => true,
+        layout: () => ({}),
+        keys: () => [],
+        window: () => ({ platform: "macos", active: true }),
+        TextareaState: { new: fakeState },
+        InputState: { new: fakeState },
+        Textarea: elementStub(),
+        Input: elementStub(),
+        Popover: elementStub(),
+        HoverCard: elementStub(),
+        div: () => makeEl("div"),
+        v_flex: () => makeEl("v_flex"),
+        h_flex: () => makeEl("h_flex"),
+        nextCommand: () => new Promise(() => {}),
+        watchFolder: () => () => {},
+        folderPoll: () => () => new Promise(() => {}),
+        inheritedHistory: async () => ({ lines: [], offset: 0, truncated: false }),
+        Tail: class {
+          constructor(file) { this.file = file; this.offset = 0; this.truncated = false; }
+          async read() { return []; }
+        },
+        locate: async () => sessionFile,
+        resolveSession: async (_term, _screen, file) => ({ file, evidence: "test", matchCount: 1, subagent: false }),
+        bindingKey,
+        chooseBinding,
+        ChatAttention,
+        IdentifyFeedback,
+        identifyKey,
+        loadCommands: async () => [],
+        catalog: async () => ({ models: [] }),
+        modelName: () => "gpt-5",
+        CLAUDE_EFFORTS: [],
+        sidebarVisible,
+        exec: async (cmd) => (cmd === "ps" ? { code: 0, stdout: "Mon Nov 13 00:00:00 2026\n", stderr: "" } : { code: 0, stdout: "", stderr: "" }),
+        hc: async () => ({ code: 0, stdout: "", stderr: "" }),
+      });
+
+      function elementStub() {
+        const proxy = new Proxy({}, { get: () => () => proxy });
+        return proxy;
+      }
+
+      const chat = new Chat();
+      const { cx } = makeCx();
+      assert.doesNotThrow(() => chat.init({}, cx));
+      for (let i = 0; i < 40 && !chat.sessionResolved; i++) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+
+      assert.equal(chat.sessionResolved, true);
+      const rendered = chat.render();
+      const texts = collectTexts(rendered.__node);
+      assert.equal(texts.includes("Loading conversation…"), false);
+
+      await chat.tracer.flush();
+      const expectedTracePath = join(appHomeDir, "traces", "herdr-codex-handoff-t1h.jsonl");
+      if (traceEnabled) {
+        assert.equal(existsSync(expectedTracePath), true);
+        const traceContent = readFileSync(expectedTracePath, "utf8");
+        assert.match(traceContent, /"event":"check_state"/);
+      } else {
+        assert.equal(existsSync(expectedTracePath), false);
+      }
+      chat.gen++;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

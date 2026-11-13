@@ -1,6 +1,7 @@
 // Non-invasive monotonic flight recorder for Codex live-stream vs JSONL
-// handoff diagnostics. Disabled by default; writes serialized JSONL events to
-// /tmp/herdr-codex-handoff-<id>.jsonl only when explicitly enabled.
+// handoff diagnostics. Disabled by default; writes serialized JSONL events under
+// ${appHome()}/traces/herdr-codex-handoff-<id>.jsonl when enabled in Chat
+// (falling back to /tmp only for standalone callers that omit `dir`).
 import * as fs from "fs/promises";
 
 const HIGH_FREQ_EVENTS = new Set(["check_state", "follow_frame", "render_sig"]);
@@ -12,6 +13,8 @@ const perfNow = () => {
 
 /** Appends a chunk to `path`, using fs.appendFile when available or read+write in GPUI. */
 async function appendText(path, chunk) {
+  const slash = path.lastIndexOf("/");
+  if (slash > 0) await fs.mkdir(path.slice(0, slash), { recursive: true }).catch(() => {});
   const mod = /** @type {{ appendFile?: (p: string, d: string, e?: string) => Promise<void> }} */ (/** @type {unknown} */ (fs));
   if (typeof mod.appendFile === "function") {
     await mod.appendFile(path, chunk, "utf8");
@@ -23,12 +26,12 @@ async function appendText(path, chunk) {
 
 export class HandoffTracer {
   /**
-   * @param {{ id?: string, getId?: () => string, isEnabled?: () => boolean, dir?: string, append?: (path: string, chunk: string) => Promise<void> }} [options]
+   * @param {{ id?: string, getId?: () => string, isEnabled?: () => boolean, dir?: string | (() => string), append?: (path: string, chunk: string) => Promise<void> }} [options]
    */
   constructor(options = {}) {
     this.getId = typeof options.getId === "function" ? options.getId : () => options.id ?? "default";
     this.isEnabledFn = typeof options.isEnabled === "function" ? options.isEnabled : () => false;
-    this.dir = options.dir ?? "/tmp";
+    this.resolveDir = typeof options.dir === "function" ? options.dir : () => options.dir ?? "/tmp";
     this.appendFn = typeof options.append === "function" ? options.append : appendText;
     this.lastMs = 0;
     this.lastSig = new Map();
@@ -48,7 +51,7 @@ export class HandoffTracer {
   /** Resolves the sanitized JSONL log path for the current chat instance. */
   path() {
     const safeId = String(this.getId() || "default").replace(/[^A-Za-z0-9._-]+/g, "_");
-    return `${this.dir}/herdr-codex-handoff-${safeId}.jsonl`;
+    return `${this.resolveDir()}/herdr-codex-handoff-${safeId}.jsonl`;
   }
 
   /** Records a monotonic JSONL trace event, deduplicating high-frequency signatures. */
@@ -63,7 +66,7 @@ export class HandoffTracer {
     const entry = { t_ms: this.lastMs, ts: new Date().toISOString(), event, ...data };
     this.pending.push(JSON.stringify(entry) + "\n");
     if (!this.flushing) {
-      this.flushing = this.#drain().finally(() => {
+      this.flushing = this._drain().finally(() => {
         this.flushing = null;
       });
     }
@@ -76,7 +79,7 @@ export class HandoffTracer {
     }
   }
 
-  async #drain() {
+  async _drain() {
     while (this.pending.length) {
       const chunk = this.pending.splice(0, this.pending.length).join("");
       try {
