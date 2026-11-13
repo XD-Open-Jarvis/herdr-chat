@@ -1990,7 +1990,7 @@ export default class Chat extends View {
       .tooltip("View image").on_click(() => openOverlay({ mod: "chat-file", kind: "window",
         key: `chat-image-${ref}`, width: 900, height: 680, frame: "none",
         props: { image: c.rel, imageWidth: c.w, imageHeight: c.h, title: c.abs.split("/").pop() } }))
-      .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)));
+      .child(image(c.rel).w(Math.round(c.w * k)).h(Math.round(c.h * k)).rounded(8));
   }
 
   openFilePreview(url, cx, change = null, changes = null, collapseOthers = false) {
@@ -2054,17 +2054,15 @@ export default class Chat extends View {
     }
     if (e.kind === "assistant") {
       // On hover, Copy for the whole reply, in a row under it that's always there.
-      const on = this.hovered === e.key && e.key !== "streaming";
       return v_flex().id(`row-${e.key}`).w_full().relative().gap(6).text_size(14.5).line_height("24px").on_hover(this.hover(e.key))
         .child(this.reply(e, t))
-        .when(nextKind !== "tools", row => row.child(h_flex().h(18).gap(4).when(on, (el) => el
-          .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t).size(18)))));
+        .when(nextKind !== "tools" && nextKind !== "changes", row => row.child(this.replyCopy(e, t)));
     }
     if (e.kind === "notice") {
       const at = new Date(e.timestamp);
       const time = Number.isFinite(at.getTime()) ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : null;
-      return h_flex().w_full().gap(8).py(2).items_center().text_size(11.5).text_color(t.dim)
-        .child(div().flex_1().min_w(0).truncate().tooltip(e.detail ?? e.text).child(e.text))
+      return h_flex().w_full().gap(5).py(2).items_center().text_size(11.5).text_color(t.dim)
+        .child(div().min_w(0).truncate().tooltip(e.detail ?? e.text).child(e.text))
         .when(Boolean(time), el => el.child(div().flex_none().child(`· ${time}`)));
     }
     if (e.kind === "card") return this.card(e, t);
@@ -2082,6 +2080,11 @@ export default class Chat extends View {
         .border_color(t.border).bg(t.surface).text_size(13).child(this.markdown(`summary-${e.key}`, e.summary)));
     }
     return this.tools(e, t, last);
+  }
+
+  replyCopy(e, t) {
+    return h_flex().h(18).gap(4).when(this.hovered === e.key && e.key !== "streaming", (el) => el
+      .child(this.tinyButton(`copya-${e.key}`, this.copied === `a-${e.key}` ? "check" : "copy", "Copy reply", (_e, cx) => this.copyOut(e.text, `a-${e.key}`, cx), t).size(18)));
   }
 
   // Render terminal output as selectable literal text, without Markdown's
@@ -2515,6 +2518,12 @@ export default class Chat extends View {
     this.settle();
     const { start, ents } = this.shown();
     const shown = ents.slice(start);
+    const copyAtChange = new Map(), deferCopy = new Set();
+    for (let index = 0; index < shown.length; index++) {
+      if (shown[index].kind !== "changes") continue;
+      const reply = shown.slice(0, index).reverse().find(entry => entry.kind === "assistant" || entry.kind === "user");
+      if (reply?.kind === "assistant") { copyAtChange.set(shown[index].key, reply); deferCopy.add(reply.key); }
+    }
     const anchorCard = this.anchorCard;
     this.anchorCard = false;
     // The conversation sits in a centered column as wide as the message card.
@@ -2542,8 +2551,15 @@ export default class Chat extends View {
       .children(withPending(shown, this.pending).map((entry, index, entries) => {
         const previous = entries[index - 1];
         const tight = previous && ((["assistant", "tools"].includes(previous.kind) && ["assistant", "tools"].includes(entry.kind)) || entry.kind === "changes");
-        return v_flex().w_full().mt(index ? tight ? 8 : 18 : 0).child(entry.kind === "pending"
-          ? this.queued(entry.message, entry.index, t) : this.entry(entry, t, index === entries.length - 1, entries[index + 1]?.kind));
+        const completed = entry.kind === "notice" && entry.event === "completed";
+        const copyReply = copyAtChange.get(entry.key);
+        return v_flex().w_full().mt(index ? completed ? 0 : tight ? 8 : 18 : 0).child(entry.kind === "pending"
+          ? this.queued(entry.message, entry.index, t) : copyReply
+            ? v_flex().id(`copy-after-${entry.key}`).w_full().on_hover(this.hover(copyReply.key))
+              .child(this.entry(entry, t, index === entries.length - 1, entries[index + 1]?.kind))
+              .child(this.replyCopy(copyReply, t))
+            : this.entry(entry, t, index === entries.length - 1,
+              deferCopy.has(entry.key) ? "changes" : entries[index + 1]?.kind));
       }))
       .when(Boolean(this.streamShown()), (el) => el.child(v_flex().w_full().mt(8).child(this.entry({ kind: "assistant", text: this.streamShown(), key: "streaming" }, t, true))))
       .when(Boolean(this.running), (el) => el.child(v_flex().w_full().mt(8).child(this.runningView(t))))
@@ -2662,7 +2678,7 @@ export default class Chat extends View {
           .when(!working || stop || this.dialog, el => el.tooltip(stop ? "Stop" : this.dialog ? "Start" : "Send"))
           .on_click((_e, cx) => (stop ? hc(["interrupt", this.term]) : this.send(cx)))
           .child(stop ? div().size(12).flex_none().rounded(2).bg(t.accent_foreground) : "↑")));
-    return v_flex().flex_none().bg(t.background).px(16).pb(14).gap(8)
+    return v_flex().flex_none().bg(t.background).rounded_b(9).overflow_hidden().px(16).pb(14).gap(8)
       .when(Boolean(this.t?.issue?.usage), el => el.child(h_flex().w_full().justify_center().child(
         h_flex().w_full().max_w(900).px(10).py(8).gap(8).items_center().rounded(8).border_1().border_color(t.blocked)
           .child(div().flex_1().min_w(0).text_size(12).text_color(t.blocked)
