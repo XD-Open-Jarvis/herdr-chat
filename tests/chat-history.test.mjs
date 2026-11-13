@@ -111,3 +111,26 @@ test('rebaseHistory aligns identical short entries to the recent suffix instead 
  assert.equal(next.entries[3].key,'recent-a');
  assert.equal(pending[0].users,2);
 });
+
+test('inheritedHistory advances past oversized single JSONL lines (> window size) and slims compacted records',async()=>{
+ const s=setup();try{
+  const bigCompacted=JSON.stringify({type:'compacted',payload:{blob:'z'.repeat(25000)}})+'\n';
+  const older=Array.from({length:5},(_,i)=>s.line(`older-${i}`));
+  const newer=Array.from({length:3},(_,i)=>s.line(`newer-${i}`));
+  const end=s.write(0,null,older.join('')+bigCompacted+newer.join(''));
+  const execMock=async(_cmd,args)=>{
+   const out=execFileSync('python3',args,{env:{...process.env,HOME:s.home},encoding:'utf8',maxBuffer:16*1024*1024});
+   return {code:0,stdout:out,stderr:''};
+  };
+  const smallChunkSource=source.replace(/^import .*;\n/gm,'').replace(/export /g,'').replace('const HISTORY_WINDOW = 3 * 1024 * 1024;','const HISTORY_WINDOW = 1024;');
+  const inheritedHistory=runInNewContext(smallChunkSource+'\ninheritedHistory',{exec:execMock});
+  const first=await inheritedHistory(s.files[0],null,4096);
+  assert.ok(first.lines.some(l=>l==='{"type":"compacted"}'),'oversized compacted record should be consumed and slimmed');
+  assert.equal(first.truncated,true);
+  const res=await inheritedHistory(s.files[0],null,30000);
+  const texts=res.lines.filter(l=>!l.includes('"compacted"')).map(l=>JSON.parse(l).text);
+  assert.ok(texts.includes('older-4'),'larger budget must advance past the >window compacted line into older entries');
+  assert.deepEqual(Array.from(texts.slice(-3)),['newer-0','newer-1','newer-2']);
+  assert.equal(res.offset,end);
+ }finally{s.close();}
+});

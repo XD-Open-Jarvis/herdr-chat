@@ -1932,25 +1932,37 @@ export default class Chat extends View {
     const waitForChange = folderPoll(watchFolder, cx.timer, dir);
     cx.spawn(async (cx) => {
       try {
-        let lines;
-        if (kind === "codex") {
-          const initial = await inheritedHistory(file, on, moreBytes ?? this.historyBytes);
-          if (gen !== this.gen) return;
-          tail.offset = initial.offset;
-          tail.truncated = initial.truncated;
-          lines = initial.lines;
-        } else {
-          lines = await tail.read();
-          if (gen !== this.gen) return;
+        const prevVisible = previous ? withChanges(compactSettings(previous.entries)).length : 0;
+        let targetBytes = moreBytes ?? this.historyBytes;
+        let lines, transcript;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          if (kind === "codex") {
+            const initial = await inheritedHistory(file, on, targetBytes);
+            if (gen !== this.gen) return;
+            tail.offset = initial.offset;
+            tail.truncated = initial.truncated;
+            lines = initial.lines;
+          } else {
+            if (attempt > 0) {
+              tail = new Tail(file, on, targetBytes);
+              this.historyTail = tail;
+              tailState.tail = tail;
+            }
+            lines = await tail.read();
+            if (gen !== this.gen) return;
+          }
+          transcript = previous ? new Transcript(kind) : this.t;
+          for (const line of lines) transcript.feed(line);
+          if (!previous || !tail.truncated) break;
+          if (withChanges(compactSettings(transcript.entries)).length > prevVisible) break;
+          targetBytes += 4 * 1024 * 1024;
         }
-        const transcript = previous ? new Transcript(kind) : this.t;
-        for (const line of lines) transcript.feed(line);
         if (previous) {
           rebaseHistory(previous, transcript, this.pending, gen);
           this.t = transcript;
           this.limit += PAGE;
           this.earlier = true;
-          this.historyBytes = moreBytes;
+          this.historyBytes = targetBytes;
         }
         this.truncated = tail.truncated;
         this.historyLoading = false;

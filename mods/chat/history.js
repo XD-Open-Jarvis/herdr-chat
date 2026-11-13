@@ -63,7 +63,9 @@ remaining = limit
 to_skip = skip_tail
 chunks = []
 truncated = False
-for path, start, end in reversed(segments):
+total_consumed = 0
+seg_list = list(reversed(segments))
+for seg_idx, (path, start, end) in enumerate(seg_list):
     seg_len = end - start
     if to_skip >= seg_len:
         to_skip -= seg_len
@@ -81,18 +83,52 @@ for path, start, end in reversed(segments):
             prev = stream.read(1)
             data = stream.read(take)
             if prev != b"\\n":
-                data = data.partition(b"\\n")[2]
-            truncated = True
+                part = data.partition(b"\\n")[2]
+                if part:
+                    data = part
+                    truncated = True
+                else:
+                    pos = eff_end - take
+                    prefix = []
+                    while pos > start:
+                        step = min(65536, pos - start)
+                        pos -= step
+                        stream.seek(pos)
+                        buf = stream.read(step)
+                        nl = buf.rfind(b"\\n")
+                        if nl >= 0:
+                            prefix.append(buf[nl + 1:])
+                            pos += nl + 1
+                            break
+                        prefix.append(buf)
+                    data = b"".join(reversed(prefix)) + data
+                    truncated = pos > start or seg_idx < len(seg_list) - 1
+            else:
+                truncated = True
         else:
             stream.seek(start)
             data = stream.read(take)
+    raw_consumed = len(data)
+    if b'"compacted"' in data and len(data) > 4096:
+        slim = []
+        for raw_line in data.splitlines():
+            if len(raw_line) > 4096 and b'"compacted"' in raw_line:
+                try:
+                    if json.loads(raw_line).get("type") == "compacted":
+                        raw_line = b'{"type":"compacted"}'
+                except Exception:
+                    pass
+            slim.append(raw_line)
+        data = b"\\n".join(slim) + (b"\\n" if data.endswith(b"\\n") else b"")
     chunks.append(data)
-    remaining -= take
-consumed = sum(len(c) for c in chunks)
+    total_consumed += raw_consumed
+    remaining -= raw_consumed
+    if truncated:
+        break
 print(json.dumps({"lines": b"".join(reversed(chunks)).decode("utf-8", errors="replace").splitlines(),
                   "offset": offset,
                   "truncated": truncated,
-                  "nextSkip": skip_tail + consumed}))
+                  "nextSkip": skip_tail + total_consumed}))
 `;
 
 const HISTORY_WINDOW = 3 * 1024 * 1024;
