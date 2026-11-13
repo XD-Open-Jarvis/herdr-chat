@@ -299,7 +299,11 @@ export default class Agents extends View {
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
       if (collapsed) {
-        const tooltip = [a.space_name, label(a), more].filter(Boolean).join(" · ");
+        const parts = [];
+        for (const p of [machine, a.space_name, more || a.program?.name || label(a)]) {
+          if (p && !parts.includes(p)) parts.push(p);
+        }
+        const tooltip = parts.join(" · ");
         return h_flex()
           .id(`ag-${a.address}`)
           .h(28)
