@@ -27,7 +27,9 @@ import { parsePrompt, choose, menuAtBottom } from "./prompt.js";
 import { loadCommands, matchCommands } from "./commands.js";
 import { askSide, sessionOf, control, listSessions, askCodexSide, codexCalls } from "./sdk.js";
 import { copyText, pasteImage, pickFiles, imageSize } from "./platform.js";
-import { live } from "./stream.js";
+import { live, liveSnapshot } from "./stream.js";
+import { CodexHandoff } from "./handoff.js";
+import { HandoffTracer } from "./trace.js";
 import { withPending } from "./timeline.js";
 import { sidebarVisible, hoverGeometry } from "./hover-diff.js";
 import { fileLink, previewKey, previewLayout } from "./preview.js";
@@ -188,6 +190,14 @@ export default class Chat extends View {
     if (shared("chat.bind")) setShared("chat.bind", null); // left by an earlier version
     this.gen = 0;
     this.t = null;
+    this.activeTail = null;
+    this.codexHandoff = new CodexHandoff();
+    this.traceFileFlag = false;
+    this.traceFileCheckedAt = 0;
+    this.tracer = new HandoffTracer({
+      getId: () => this.terminalId || localId(this.term) || "chat",
+      isEnabled: () => Boolean(shared("chat.trace")) || localStorage.getItem("chat.trace") === "1" || Boolean(this.traceFileFlag),
+    });
     this.limit = PAGE;
     this.open = new Set();
     this.images = {};
@@ -353,29 +363,159 @@ export default class Chat extends View {
     });
   }
 
+  ensureFollow(kind, cx, graceMs = 1500) {
+    if (!kind || !this.chatVisible() || !this.term) return;
+    if (kind !== "codex") {
+      if (!this.streamLoop && this.terminal()?.status === "working") this.follow(kind, cx);
+      return;
+    }
+    if (this.streamLoop) {
+      if (this.streamLoop.kind === "codex" && graceMs > 0) {
+        const until = Date.now() + graceMs;
+        if (until > (this.streamLoop.graceUntil ?? 0)) this.streamLoop.graceUntil = until;
+      }
+      return;
+    }
+    this.follow("codex", cx, graceMs);
+  }
+
+  beforeCodexPending() {
+    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
+    (this.codexHandoff ??= new CodexHandoff()).noteUserSend();
+    this.stream = null;
+    this.running = null;
+  }
+
+  afterCodexPending(cx, context, item) {
+    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
+    this.tracer?.record("outbox_claim", {
+      id: item?.id ?? null,
+      direct: Boolean(item?.direct),
+      status: context?.status ?? null,
+      len: item?.text?.length ?? 0,
+    });
+    if (this.chatVisible()) this.ensureFollow("codex", cx, 1800);
+  }
+
+  beforeCodexDirectSend(text) {
+    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
+    if (!/^[\/!]/.test(text)) (this.codexHandoff ??= new CodexHandoff()).noteUserSend();
+    this.tracer?.record("send", { direct: true, command: /^[\/!]/.test(text), len: text.length });
+  }
+
+  afterCodexDirectSend(text, cx) {
+    if ((this.t?.kind ?? agentKind(this.terminal())) !== "codex") return;
+    if (!/^[\/!]/.test(text) && this.chatVisible()) this.ensureFollow("codex", cx, 1800);
+  }
+
   // While the agent works: the reply it's writing, read off its terminal a few
   // times a second, until the log has it.
-  follow(kind, cx) {
-    const loop = (this.streamLoop = {});
+  follow(kind, cx, graceMs = 0) {
+    if (kind !== "codex") {
+      const loop = (this.streamLoop = {});
+      cx.spawn(async (cx) => {
+        while (this.streamLoop === loop && this.terminal()?.status === "working" && this.chatVisible()) {
+          const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
+          if (this.streamLoop !== loop || !this.chatVisible()) break;
+          const now = r ? live(r.stdout, kind) : null;
+          const text = now?.kind === "text" ? now.text : null;
+          // Between steps the screen can show nothing new, or only text the chat
+          // already has: keep the last command's card rather than drop it and
+          // bring one back (the page would jump). New reply text replaces it.
+          const fresh = text && !this.logged(text);
+          const run = now?.kind === "run" ? now : fresh ? null : this.running;
+          if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
+          await sleep(cx, 350);
+        }
+        if (this.streamLoop === loop) {
+          this.streamLoop = null;
+          this.stream = null;
+          this.running = null;
+          if (this.chatVisible()) cx.notify();
+        }
+      });
+      return;
+    }
+
+    const loop = (this.streamLoop = { kind: "codex", graceUntil: graceMs > 0 ? Date.now() + graceMs : 0 });
     cx.spawn(async (cx) => {
-      while (this.streamLoop === loop && this.terminal()?.status === "working" && this.chatVisible()) {
+      if (this.chatVisible()) {
+        this.tracer?.record("follow_start", {
+          graceMs,
+          status: this.terminal()?.status ?? null,
+          stage: this.t?.codexTurn?.stage ?? null,
+        });
+      }
+      const handoffOpts = () => ({
+        codexTurn: this.t?.codexTurn ?? null,
+        pendingCount: this.pending?.length ?? 0,
+        termStatus: this.terminal()?.status ?? null,
+        hasPriorAssistant: (this.t?.entries ?? []).some((e) => e.kind === "assistant"),
+      });
+      while (
+        this.streamLoop === loop &&
+        this.chatVisible() &&
+        (this.terminal()?.status === "working" || Date.now() < loop.graceUntil)
+      ) {
+        if (this.terminal()?.status === "working") loop.graceUntil = 0;
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
         if (this.streamLoop !== loop || !this.chatVisible()) break;
-        const now = r ? live(r.stdout, kind) : null;
-        const text = now?.kind === "text" ? now.text : null;
-        // Between steps the screen can show nothing new, or only text the chat
-        // already has: keep the last command's card rather than drop it and
-        // bring one back (the page would jump). New reply text replaces it.
-        const fresh = text && !this.logged(text);
-        const run = now?.kind === "run" ? now : fresh ? null : this.running;
-        if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
+        const handoff = (this.codexHandoff ??= new CodexHandoff());
+        const snap = r ? liveSnapshot(r.stdout, "codex") : null;
+        let res = handoff.update(snap, handoffOpts());
+        this.tracer?.record("follow_frame", {
+          sig: `${res.reason}|${res.shouldDrainBeforeDrop}|${snap?.item?.kind ?? "none"}|${snap?.blockOrdinal ?? 0}|${snap?.workedAfterAt ?? false}|${snap?.statusAfterAt ?? false}|${this.t?.codexTurn?.stage ?? "none"}|${res.streamText?.length ?? 0}`,
+          reason: res.reason,
+          shouldDrain: res.shouldDrainBeforeDrop,
+          itemKind: snap?.item?.kind ?? null,
+          blockOrdinal: snap?.blockOrdinal ?? 0,
+          workedAfterAt: Boolean(snap?.workedAfterAt),
+          statusAfterAt: Boolean(snap?.statusAfterAt),
+          stage: this.t?.codexTurn?.stage ?? null,
+          streamLen: res.streamText?.length ?? 0,
+        });
+        if (res.shouldDrainBeforeDrop) {
+          this.tracer?.record("follow_drain", { phase: "mid_turn", stage: this.t?.codexTurn?.stage ?? null });
+          handoff.beginDrain();
+          await this.flushTail(cx);
+          if (this.streamLoop !== loop || !this.chatVisible()) {
+            handoff.endDrain();
+            break;
+          }
+          handoff.endDrain({ keepRun: true });
+          res = handoff.update(snap, handoffOpts());
+        }
+        const nextStream = handoff.visibleStream(this.t?.codexTurn);
+        const nextRun = res.running;
+        if (nextStream !== this.stream || JSON.stringify(nextRun) !== JSON.stringify(this.running)) {
+          this.stream = nextStream;
+          this.running = nextRun;
+          cx.notify();
+        }
         await sleep(cx, 350);
       }
       if (this.streamLoop === loop) {
-        this.streamLoop = null;
-        this.stream = null;
-        this.running = null;
-        if (this.chatVisible()) cx.notify();
+        const stillVisible = this.codexHandoff?.visibleStream(this.t?.codexTurn);
+        if (stillVisible) {
+          this.tracer?.record("follow_drain", { phase: "exit", stage: this.t?.codexTurn?.stage ?? null });
+          this.codexHandoff.beginDrain();
+          await this.flushTail(cx);
+          if (!machineOf(this.term) && this.t?.codexTurn?.stage === "awaiting_text") {
+            await sleep(cx, 120);
+            if (this.streamLoop === loop) await this.flushTail(cx);
+          }
+        }
+        if (this.streamLoop === loop) {
+          this.codexHandoff?.finishFollow();
+          this.tracer?.record("follow_exit", {
+            stage: this.t?.codexTurn?.stage ?? null,
+            hadStream: Boolean(stillVisible),
+          });
+          this.streamLoop = null;
+          this.stream = null;
+          this.running = null;
+          if (this.chatVisible()) cx.notify();
+        }
       }
     });
   }
@@ -497,6 +637,9 @@ export default class Chat extends View {
 
   // The streamed reply, unless the log already has it.
   streamShown() {
+    if ((this.t?.kind ?? agentKind(this.terminal())) === "codex") {
+      return this.codexHandoff?.visibleStream(this.t?.codexTurn) ?? null;
+    }
     return this.stream && !this.logged(this.stream) ? this.stream : null;
   }
 
@@ -1190,6 +1333,8 @@ export default class Chat extends View {
     this.sig = null;
     this.file = null;
     this.t = null;
+    this.activeTail = null;
+    this.codexHandoff?.reset();
     this.chosen = null;
     this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
     this.gen++;
@@ -1247,12 +1392,43 @@ export default class Chat extends View {
       this.file = null;
       this.t = null;
       this.sig = null;
+      this.activeTail = null;
       this.streamLoop = null;
       this.stream = null;
       this.running = null;
+      this.codexHandoff?.reset();
       if (prevAddress !== undefined) this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
     }
     const kind = agentKind(term);
+    if (kind === "codex") {
+      const now = Date.now();
+      if (now - (this.traceFileCheckedAt ?? 0) >= 2000) {
+        this.traceFileCheckedAt = now;
+        const fsAny = /** @type {{ exists?: (p: string) => Promise<boolean>, access?: (p: string) => Promise<void> }} */ (/** @type {unknown} */ (fs));
+        const probe = typeof fsAny.exists === "function"
+          ? fsAny.exists("/tmp/herdr-chat-trace.on")
+          : typeof fsAny.access === "function"
+            ? fsAny.access("/tmp/herdr-chat-trace.on").then(() => true, () => false)
+            : Promise.resolve(false);
+        Promise.resolve(probe).then((on) => { this.traceFileFlag = Boolean(on); }).catch(() => { this.traceFileFlag = false; });
+      }
+      if (this.pending?.length && ["working", "blocked"].includes(term?.status)) {
+        for (const p of this.pending) if (!p.delivering) p.seenWorking = true;
+      }
+      if (this.tracer?.isEnabled()) {
+        const st = this.t?.codexTurn;
+        const sig = `${term?.status ?? ""}|${st?.stage ?? ""}|${st?.epoch ?? 0}|${this.pending?.length ?? 0}|${Boolean(this.streamLoop)}|${Boolean(this.file)}`;
+        this.tracer.record("check_state", {
+          sig,
+          status: term?.status ?? null,
+          stage: st?.stage ?? null,
+          epoch: st?.epoch ?? 0,
+          pending: this.pending?.length ?? 0,
+          following: Boolean(this.streamLoop),
+          hasFile: Boolean(this.file),
+        });
+      }
+    }
     const titleIdentity = kind === "codex" && codexTitleIdentity(term);
     this.identifyFeedback ??= new IdentifyFeedback();
     this.identifyFeedback.begin(identifyKey(term, titleIdentity));
@@ -1264,7 +1440,10 @@ export default class Chat extends View {
     });
     if (seen) cx.spawn(async cx => { await seen; cx.notify(); });
     this.loadCmds(term, kind, cx);
-    if (kind && term?.status === "working" && !this.streamLoop) this.follow(kind, cx);
+    if (kind && term?.status === "working") {
+      if (kind === "codex") this.ensureFollow("codex", cx, 0);
+      else if (!this.streamLoop) this.follow(kind, cx);
+    }
     const sig = term && kind ? `${kind}:${term.address}:${term.foreground?.pid}` : null;
     this.ticks++;
     const titleChanged = titleIdentity && !titleMatchesFile(titleIdentity, this.file);
@@ -1297,7 +1476,8 @@ export default class Chat extends View {
             if (!stillCurrent()) return;
             if (titleIdentity && this.file && !titleMatchesFile(titleIdentity, this.file)) {
               this.gen++; this.file = null; this.t = null; this.sessionResolved = false;
-              this.streamLoop = null; this.stream = null; this.running = null;
+              this.activeTail = null; this.streamLoop = null; this.stream = null; this.running = null;
+              this.codexHandoff?.reset();
               cx.notify();
             }
             this.binding = previous;
@@ -1321,7 +1501,8 @@ export default class Chat extends View {
           this.error = null;
           if (!file && kind === "codex") {
             this.gen++; this.file = null; this.t = null;
-            this.streamLoop = null; this.stream = null; this.running = null;
+            this.activeTail = null; this.streamLoop = null; this.stream = null; this.running = null;
+            this.codexHandoff?.reset();
           }
           if (file && file !== this.file) this.start(file, machineOf(this.term), kind, cx);
           this.missing = !file && !this.file;
@@ -1332,7 +1513,8 @@ export default class Chat extends View {
           if (kind === "codex" && !this.binding) {
             this.sessionResolved = false;
             this.gen++; this.file = null; this.t = null;
-            this.streamLoop = null; this.stream = null; this.running = null;
+            this.activeTail = null; this.streamLoop = null; this.stream = null; this.running = null;
+            this.codexHandoff?.reset();
           }
           this.error = String(e?.message ?? e);
         }
@@ -1402,6 +1584,56 @@ export default class Chat extends View {
     cx.notify();
   }
 
+  readTailOnce(cx, state = this.activeTail) {
+    if (!state || state.gen !== this.gen || !state.ready) return Promise.resolve(0);
+    const run = async () => {
+      if (state.gen !== this.gen || !state.ready) return 0;
+      try {
+        const lines = await state.tail.read();
+        if (state.gen !== this.gen) return 0;
+        this.truncated = state.tail.truncated;
+        if (lines.length) {
+          for (const l of lines) this.t.feed(l);
+          this.grew = true;
+          if (this.chatVisible()) this.cacheShown(cx);
+          this.nameSpace();
+          if (state.kind === "codex") {
+            const st = this.t?.codexTurn;
+            this.tracer?.record("tail_batch", {
+              count: lines.length,
+              stage: st?.stage ?? null,
+              epoch: st?.epoch ?? 0,
+              assistantCount: st?.assistantCount ?? 0,
+              toolCount: st?.toolCount ?? 0,
+            });
+            if (st?.stage === "awaiting_text" && this.chatVisible()) {
+              this.ensureFollow("codex", cx, 1800);
+            }
+          }
+          if (this.chatVisible()) cx.notify();
+        }
+        if (this.error) { this.error = null; cx.notify(); }
+        return lines.length;
+      } catch (e) {
+        if (state.gen === this.gen) {
+          this.error = String(e?.message ?? e);
+          cx.notify();
+        }
+        return 0;
+      }
+    };
+    state.chain = state.chain.then(run, run);
+    return state.chain;
+  }
+
+  async flushTail(cx) {
+    const state = this.activeTail;
+    if (!state || state.gen !== this.gen || !state.ready) return 0;
+    await state.chain;
+    if (state.gen !== this.gen || !state.ready) return 0;
+    return this.readTailOnce(cx, state);
+  }
+
   start(file, on, kind, cx, moreBytes = null) {
     const gen = ++this.gen;
     const previous = moreBytes ? this.t : null;
@@ -1414,6 +1646,7 @@ export default class Chat extends View {
     this.file = file;
     if (!previous) {
       this.t = new Transcript(kind);
+      this.codexHandoff?.reset();
       this.limit = PAGE;
       this.off = 0;
       this.historyBytes = 4 * 1024 * 1024;
@@ -1422,6 +1655,8 @@ export default class Chat extends View {
     this.error = null;
     let tail = new Tail(file, on, moreBytes ?? this.historyBytes);
     this.historyTail = tail;
+    const tailState = { gen, tail, kind, ready: false, chain: Promise.resolve() };
+    this.activeTail = tailState;
     const dir = file.slice(0, file.lastIndexOf("/"));
     const waitForChange = folderPoll(watchFolder, cx.timer, dir);
     cx.spawn(async (cx) => {
@@ -1458,25 +1693,13 @@ export default class Chat extends View {
         if (!previousTail) return;
         tail = previousTail;
         this.historyTail = tail;
+        tailState.tail = tail;
       }
+      tailState.ready = true;
       while (gen === this.gen) {
         if (!this.chatVisible()) { await sleep(cx, 1000); continue; }
-        try {
-          const lines = await tail.read();
-          if (gen !== this.gen) return;
-          this.truncated = tail.truncated;
-          if (lines.length) {
-            for (const l of lines) this.t.feed(l);
-            this.grew = true;
-            if (this.chatVisible()) this.cacheShown(cx);
-            this.nameSpace();
-            if (this.chatVisible()) cx.notify();
-          }
-          if (this.error) { this.error = null; cx.notify(); }
-        } catch (e) {
-          this.error = String(e?.message ?? e);
-          cx.notify();
-        }
+        await this.readTailOnce(cx, tailState);
+        if (gen !== this.gen) return;
         if (on) await sleep(cx, 1500);
         else await waitForChange();
       }
@@ -1544,10 +1767,12 @@ export default class Chat extends View {
     if (!item) return;
     const target = this.term;
     if (["idle", "done"].includes(context.status)) { this.stream = null; this.running = null; }
-    const pending = { ...item, files: item.paths.length, users: this.userCount(),
+    this.beforeCodexPending?.(context, item);
+    const pending = { ...item, fromQueue: !item.direct, files: item.paths.length, users: this.userCount(),
       afterKey: this.t?.entries.findLast((e) => !e.ephemeral)?.key ?? null, at: Date.now(), delivering: true };
     this.pending.push(pending);
     this.t?.markInput();
+    this.afterCodexPending?.(cx, context, item);
     cx.notify();
     cx.spawn(async cx => {
       let error = null, paused = false;
@@ -1561,6 +1786,7 @@ export default class Chat extends View {
       pending.delivering = false;
       pending.at = Date.now();
       this.outbox.finish(item.id, error, paused);
+      this.tracer?.record("deliver_done", { id: item.id, error: error ?? null, paused });
       if (error) {
         this.pending = this.pending.filter(message => message !== pending);
         if (!paused && !item.direct) this.outboxExpanded = true;
@@ -1655,11 +1881,21 @@ export default class Chat extends View {
   settle() {
     const users = (this.t?.entries ?? []).filter((e) => e.kind === "user" && !e.command);
     // One the log never matched goes once the agent has been idle a while.
-    const busy = ["working", "blocked"].includes(this.terminal()?.status);
-    this.pending = this.pending.filter((p) => p.delivering || busy || Date.now() - p.at < 15000);
+    const status = this.terminal()?.status;
+    const busy = ["working", "blocked"].includes(status);
+    const codex = (this.t?.kind ?? agentKind(this.terminal())) === "codex";
+    for (const p of this.pending) {
+      if (!p.delivering && busy) p.seenWorking = true;
+    }
+    this.pending = this.pending.filter((p) => {
+      if (!p.delivering && !busy && codex && p.seenWorking && this.t?.codexTurn?.stage === "completed") return false;
+      return p.delivering || busy || Date.now() - p.at < 15000;
+    });
+    const norm = (s) => (s ?? "").replace(/\s+/g, " ").trim();
     const used = new Set();
     this.pending = this.pending.filter((p) => {
-      const i = users.findIndex((u, n) => n >= p.users && !used.has(n) && (p.text ? Boolean(u.text?.includes(p.text.slice(0, 60))) : true));
+      const needle = p.text ? norm(p.text.slice(0, 60)) : "";
+      const i = users.findIndex((u, n) => n >= p.users && !used.has(n) && (needle ? norm(u.text).includes(needle) : true));
       if (i < 0) return true;
       used.add(i);
       return false;
@@ -1704,8 +1940,12 @@ export default class Chat extends View {
       .child(h_flex().gap(4).items_center().text_size(11.5).text_color(t.dim)
         // Codex doesn't queue: a message sent while it works goes straight into
         // the running turn as guidance, so there's nothing to send now or edit.
-        .child(div().pr(4).child(p.delivering ? Date.now() - p.at > 3000 ? "Waiting for terminal input…" : "Sending to terminal…" : waiting && claude ? "Steering · read at its next step"
-          : !claude && (status === "working" || status === "blocked") ? "Steering · added to the running turn" : "Sending…"))
+        .child(div().pr(4).child(p.delivering
+          ? Date.now() - p.at > 3000 ? "Waiting for terminal input…"
+          : p.fromQueue ? "Sending queued message…" : "Sending to terminal…"
+          : waiting && claude ? "Steering · read at its next step"
+          : !claude && (status === "working" || status === "blocked") ? "Steering · added to the running turn"
+          : !claude && p.seenWorking ? "Sent" : "Sending…"))
         .when(waiting && claude, (el) => el
           .child(act(`send-now-${i}`, "Send now", () => this.sendNow()))
           .when(Boolean(p.text), (el) => el.child(act(`edit-q-${i}`, "Edit", () => this.editQueued())))));
@@ -1823,6 +2063,7 @@ export default class Chat extends View {
     // Regular messages wait for a free turn; commands retain their immediate behavior.
     if (!/^[\/!]/.test(text) && context.scope) {
       const direct = this.outbox.canSendDirect(context);
+      this.tracer?.record("send", { queued: true, direct, len: text.length });
       this.outbox.enqueue({ text, paths: files, attachments, direct }, context.scope);
       this.saveOutbox();
       this.pumpOutbox(cx);
@@ -1836,7 +2077,9 @@ export default class Chat extends View {
       this.pending.push(directPending);
       this.t?.markInput();
     }
+    this.beforeCodexDirectSend?.(text);
     this.stream = null; this.running = null;
+    this.afterCodexDirectSend?.(text, cx);
     cx.spawn(async (cx) => {
       try {
         const ok = await this.deliver(text, files, cx);
@@ -1867,7 +2110,8 @@ export default class Chat extends View {
         this.binding = null; this.sessionResolved = false;
         this.bindingEpoch = (this.bindingEpoch ?? 0) + 1;
         this.gen++; this.file = null; this.t = null; this.sig = null;
-        this.streamLoop = null; this.stream = null; this.running = null;
+        this.activeTail = null; this.streamLoop = null; this.stream = null; this.running = null;
+        this.codexHandoff?.reset();
       }
     }
     const paths = [];
@@ -2618,6 +2862,19 @@ export default class Chat extends View {
     this.settle();
     const { start, ents } = this.shown();
     const shown = ents.slice(start);
+    if (this.tracer?.isEnabled() && (this.t?.kind ?? agentKind(this.terminal())) === "codex") {
+      const tail = shown.slice(-3).map((e) => `${e.key}:${e.kind}:${e.text?.length ?? e.items?.length ?? 0}`).join(",");
+      const streamText = this.streamShown();
+      const pendingSig = this.pending.map((p) => `${p.delivering ? 1 : 0}:${p.seenWorking ? 1 : 0}:${p.text?.length ?? 0}`).join(",");
+      const sig = `${tail}|s:${streamText?.length ?? 0}|r:${this.running?.title ?? ""}|p:${pendingSig}|st:${this.t?.codexTurn?.stage ?? ""}:${this.t?.codexTurn?.epoch ?? 0}`;
+      this.tracer.record("render_sig", {
+        sig,
+        streamLen: streamText?.length ?? 0,
+        hasRun: Boolean(this.running),
+        pending: this.pending.length,
+        stage: this.t?.codexTurn?.stage ?? null,
+      });
+    }
     const copyAtChange = new Map(), deferCopy = new Set();
     for (let index = 0; index < shown.length; index++) {
       if (shown[index].kind !== "changes") continue;

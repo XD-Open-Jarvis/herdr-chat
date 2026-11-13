@@ -158,6 +158,17 @@ export class Transcript {
     // Tokens the session used, per model, from its replies (each counted once).
     this.tokens = {};
     this.counted = new Map();
+    if (this.kind === "codex") {
+      this.codexTurn = {
+        epoch: 0,
+        turnId: null,
+        stage: "idle",
+        userCount: 0,
+        assistantCount: 0,
+        toolCount: 0,
+        lastAssistantKey: null,
+      };
+    }
   }
 
   push(entry) {
@@ -230,6 +241,18 @@ export class Transcript {
       this.issue = null;
     }
     this.push({ kind: "user", text, images, files, ...(incoming.from ? { from: incoming.from } : {}) });
+    if (this.kind === "codex" && this.codexTurn) {
+      this.codexTurn.userCount++;
+      if (this.codexTurn.stage === "idle" || this.codexTurn.stage === "completed") {
+        this.codexTurn.epoch++;
+        this.codexTurn.assistantCount = 0;
+        this.codexTurn.toolCount = 0;
+        this.codexTurn.lastAssistantKey = null;
+        this.codexTurn.stage = "awaiting_text";
+      } else if (this.codexTurn.stage === "assistant_logged") {
+        this.codexTurn.stage = "awaiting_text";
+      }
+    }
   }
 
   modelSettings(model, effort) {
@@ -424,6 +447,14 @@ export class Transcript {
     if (d.type === "event_msg" && p.type === "task_started") {
       this.turnId = p.turn_id ?? p.root_turn_id ?? null;
       this.issue = null;
+      if (this.codexTurn) {
+        this.codexTurn.epoch++;
+        this.codexTurn.turnId = this.turnId;
+        this.codexTurn.stage = "awaiting_text";
+        this.codexTurn.assistantCount = 0;
+        this.codexTurn.toolCount = 0;
+        this.codexTurn.lastAssistantKey = null;
+      }
       return;
     }
     if (d.type === "event_msg" && p.type === "error") {
@@ -443,12 +474,16 @@ export class Transcript {
       return;
     }
     if (d.type === "event_msg" && p.type === "task_complete") {
+      if (this.codexTurn) this.codexTurn.stage = "completed";
       if (p.error) this.agentError(p.error, d.timestamp, p.turn_id ?? p.root_turn_id ?? this.turnId);
       const duration = p.duration_ms ?? (Number.isFinite(p.started_at) && Number.isFinite(p.completed_at)
         ? (p.completed_at - p.started_at) * 1000 : null);
       return this.completed(duration, d.timestamp, p.turn_id ?? p.root_turn_id ?? d.timestamp);
     }
-    if (d.type === "event_msg" && p.type === "turn_aborted") return this.note("Interrupted");
+    if (d.type === "event_msg" && p.type === "turn_aborted") {
+      if (this.codexTurn) this.codexTurn.stage = "completed";
+      return this.note("Interrupted");
+    }
     // Codex's running totals: tokens, how full the context is, and its limits.
     if (d.type === "event_msg" && p.type === "token_count") {
       const total = p.info?.total_token_usage;
@@ -459,7 +494,17 @@ export class Transcript {
     }
     if (d.type !== "response_item") return;
     if (p.type === "message") {
-      if (p.role === "assistant") return this.assistant(toText((p.content ?? []).filter((c) => c?.type === "output_text")));
+      if (p.role === "assistant") {
+        const text = toText((p.content ?? []).filter((c) => c?.type === "output_text"));
+        if (!text?.trim()) return;
+        this.assistant(text);
+        if (this.codexTurn) {
+          this.codexTurn.assistantCount++;
+          this.codexTurn.lastAssistantKey = this.last()?.key ?? null;
+          this.codexTurn.stage = p.phase === "final_answer" ? "completed" : "assistant_logged";
+        }
+        return;
+      }
       if (p.role !== "user") return;
       const texts = [], images = [];
       for (const c of p.content ?? []) {
@@ -478,6 +523,10 @@ export class Transcript {
       this.toolUse(id, p.name ?? p.type.replace(/_call$/, ""), p.arguments ?? p.input ?? p.action);
       if (p.type === "web_search_call" && p.status && p.status !== "in_progress") {
         this.toolResult(id, p.action?.query ? `Searched: ${p.action.query}` : "Completed", p.status === "failed");
+      }
+      if (this.codexTurn) {
+        this.codexTurn.toolCount++;
+        if (this.codexTurn.stage !== "completed") this.codexTurn.stage = "awaiting_text";
       }
     } else if (/_call_output$/.test(p.type)) {
       this.toolResult(p.call_id, p.output, p.status === "failed");

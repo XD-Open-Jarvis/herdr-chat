@@ -14,7 +14,7 @@ const STATUS = /^• (Working|Waiting|Interrupted)\b/;
 const SUMMARY = /^(Running|Ran|Reading|Read|Searching|Searched|Listing|Listed|Writing|Wrote|Editing|Edited|Updating|Updated|Fetching|Fetched|Calling|Called|Creating|Created|Stopping|Stopped)\b.*\b(commands?|files?|patterns?|director(y|ies)|tools?|agents?|pages?|tasks?|searches)\b|^\d+ tool calls?\b/i;
 
 // { kind: "text", text } | { kind: "run", title, out: [lines], time } | null
-export function live(screen, kind) {
+export function liveSnapshot(screen, kind) {
   const k = kind === "codex" ? CODEX : CLAUDE;
   const lines = (screen ?? "").split("\n").filter((l) => !l.startsWith("[hc]"));
   // The message box at the bottom: its rule line (Claude) or its prompt (Codex).
@@ -31,12 +31,20 @@ export function live(screen, kind) {
     if (l.startsWith(k.mark) && !STATUS.test(l)) { at = i; break; }
     if (k.run.test(l)) { at = i; break; }
   }
-  if (at < 0) return null;
+  const promptLine = from > 0 ? lines[from - 1] : null;
+  const blockOrdinal = at >= 0
+    ? lines.slice(from, at + 1).filter((l) => (l.startsWith(k.mark) && !STATUS.test(l)) || k.run.test(l)).length
+    : 0;
+  const workedAfterAt = at >= 0 && lines.slice(at + 1, end).some((l) => /^\s*(?:─+\s*)?Worked for \d/.test(l));
+  const statusAfterAt = lines.slice(at >= 0 ? at + 1 : from, end).some((l) => STATUS.test(l));
+  if (at < 0) {
+    return { item: null, end, from, at, promptLine, blockOrdinal, afterToolInBlock: false, workedAfterAt, statusAfterAt };
+  }
   const head = lines[at];
   const body = [];
   for (let i = at + 1; i < end; i++) {
     const l = lines[i];
-    if ((l && !l.startsWith(" ")) || /^\s*Worked for \d/.test(l)) break;
+    if ((l && !l.startsWith(" ")) || /^\s*(?:─+\s*)?Worked for \d/.test(l)) break;
     body.push(l);
   }
   const depth = (l) => l.length - l.trimStart().length;
@@ -45,31 +53,45 @@ export function live(screen, kind) {
   // with its output under "⎿". The last one counts, unless text follows it.
   let g = -1;
   for (let j = body.length - 1; j >= 0; j--) if (isOut(body[j])) { g = j; break; }
+  let item = null;
+  let afterToolInBlock = false;
   if (g >= 0) {
     while (g > 0 && isOut(body[g - 1])) g--;
     let last = g;
     while (last + 1 < body.length && (isOut(body[last + 1]) || (body[last + 1].trim() && depth(body[last + 1]) > depth(body[g])))) last++;
     const after = body.slice(last + 1);
     const said = after.filter((l) => l.trim());
-    if (said.length && said.every((l) => SUMMARY.test(l.trim()))) return runOf(said[said.length - 1].trim(), []);
-    if (said.length) {
+    if (kind !== "codex" && said.length && said.every((l) => SUMMARY.test(l.trim()))) {
+      item = runOf(said[said.length - 1].trim(), []);
+    } else if (said.length) {
       // Text written after the tool: that's what's new.
-      return textOf(after.map((l) => l.slice(2)));
+      item = textOf(after.map((l) => l.slice(2)));
+      afterToolInBlock = item?.kind === "text";
     } else {
       let h = g - 1;
       while (h >= 0 && !body[h].trim()) h--;
       const title = h >= 0 ? body[h].trim() : k.run.test(head) ? `$ ${head.slice(2)}` : head.slice(k.mark.length);
-      return runOf(title, body.slice(g, last + 1));
+      item = runOf(title, body.slice(g, last + 1));
+    }
+  } else if (k.run.test(head) || k.tool.test(head)) {
+    item = runOf(k.run.test(head) ? `$ ${head.slice(2)}` : head.slice(k.mark.length), body);
+  } else {
+    // A summary line last in a text block: the tool it's running now (Claude only).
+    const lastLine = [...body].reverse().find((l) => l.trim());
+    const said = [head.slice(k.mark.length), ...body].map((l) => l.trim()).filter(Boolean);
+    if (kind !== "codex" && lastLine && SUMMARY.test(lastLine.trim())) {
+      item = runOf(lastLine.trim(), []);
+    } else if (kind !== "codex" && said.length && said.every((l) => SUMMARY.test(l))) {
+      item = runOf(said[said.length - 1], []);
+    } else {
+      item = textOf([head.slice(k.mark.length), ...body.map((l) => l.slice(2))]);
     }
   }
-  if (k.run.test(head) || k.tool.test(head)) return runOf(k.run.test(head) ? `$ ${head.slice(2)}` : head.slice(k.mark.length), body);
-  // A summary line last in a text block: the tool it's running now.
-  const lastLine = [...body].reverse().find((l) => l.trim());
-  if (lastLine && SUMMARY.test(lastLine.trim())) return runOf(lastLine.trim(), []);
-  // A block that is only summaries ("⏺ Running 1 shell command…"): a command.
-  const said = [head.slice(k.mark.length), ...body].map((l) => l.trim()).filter(Boolean);
-  if (said.length && said.every((l) => SUMMARY.test(l))) return runOf(said[said.length - 1], []);
-  return textOf([head.slice(k.mark.length), ...body.map((l) => l.slice(2))]);
+  return { item, end, from, at, promptLine, blockOrdinal, afterToolInBlock, workedAfterAt, statusAfterAt };
+}
+
+export function live(screen, kind) {
+  return liveSnapshot(screen, kind).item;
 }
 
 // A reply: wrapped lines back into paragraphs; blank lines, lists and code stay.
