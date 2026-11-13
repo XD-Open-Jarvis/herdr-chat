@@ -113,3 +113,28 @@ test("Chat is restored when returning to its tab and explicit TUI choice is reta
  render();active="b";render();assert.equal(tree.active,"main");active="a";render();assert.equal(tree.active,"conversation-page");
  tree.active="main";active="b";render();active="a";render();assert.equal(tree.active,"main");
 });
+
+test("syncPanel preserves chat-preview across space switches when present in panel-body",()=>{
+  const calls=[];const store=new Map();
+  const Tabs=runInNewContext(source+"\nTabs",{
+    View:class{},terminals:()=>[],panes:()=>[],spaces:()=>[],layout:()=>({}),
+    activePage:()=>null,pageMeta:()=>null,findNode:()=>null,presentationPane:()=>null,
+    localStorage:{getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v)},
+    run:(command,args)=>calls.push({command,args}),
+  });
+  const tabs=new Tabs();tabs.panels={};tabs.space="space-a";
+  const bodyWithPreview={active:"chat-preview",children:[{id:"files"},{id:"changes"},{id:"chat-preview"}]};
+  tabs.syncPanel({id:"space-a"},{hidden:false},bodyWithPreview,["files","changes"]);
+  assert.equal(tabs.panels["space-a"],"chat-preview");
+  tabs.syncPanel({id:"space-b"},{hidden:false},bodyWithPreview,["files","changes"]);
+  assert.equal(calls.at(-1).command,"layout.hide");
+  calls.length=0;
+  tabs.syncPanel({id:"space-a"},{hidden:true},bodyWithPreview,["files","changes"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[
+    {command:"layout.select",args:{stack:"panel-body",child:"chat-preview"}},
+    {command:"layout.show",args:{id:"panel"}},
+  ]);
+  calls.length=0;tabs.space="space-b";
+  tabs.syncPanel({id:"space-a"},{hidden:false},{active:"files",children:[{id:"files"}]},["files","changes"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)),[{command:"layout.hide",args:{id:"panel"}}]);
+});

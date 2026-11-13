@@ -3,11 +3,13 @@ export function outboxScope(term, session) {
   return term?.state === "live" && term?.foreground?.pid && session
     ? `${term.address.split("/").at(-1)}:${term.foreground.pid}:${session}` : null;
 }
+export const GATE_STALE_MS = 10000;
+
 export class Outbox {
   constructor(saved = {}) {
     this.items = Array.isArray(saved.items) ? saved.items.map(item => item.state === "sending"
       ? { ...item, state: "error", error: "Delivery was interrupted. Check TUI before retrying." } : item) : [];
-    this.gate = saved.gate ?? null;
+    this.gate = saved.gate ? { ...saved.gate, at: Number.isFinite(saved.gate.at) ? saved.gate.at : Date.now() } : null;
   }
   // Idle submissions start synchronously; retain an internal delivery receipt
   // for crash recovery without presenting them as queued follow-ups.
@@ -28,10 +30,11 @@ export class Outbox {
     this.items.push(item);
     return item;
   }
-  observe({ scope, status, turn }) {
+  observe({ scope, status, turn, now = Date.now() }) {
     if (!this.gate || this.gate.scope !== scope) return;
     if (status === "working" || status === "blocked") this.gate.sawBusy = true;
-    if (["idle", "done"].includes(status) && (this.gate.sawBusy ||
+    const expired = Number.isFinite(this.gate.at) && now - this.gate.at >= GATE_STALE_MS;
+    if (["idle", "done"].includes(status) && (this.gate.sawBusy || expired ||
       (Number.isSafeInteger(turn) && Number.isSafeInteger(this.gate.turn) && turn > this.gate.turn))) this.gate = null;
   }
   retryReason(context, id) {
@@ -57,7 +60,7 @@ export class Outbox {
     if (!id && ((this.gate?.scope === context.scope) || item.state !== "queued" || !["idle", "done"].includes(context.status))) return null;
     if (id) item.scope = context.scope;
     this.previousGate = this.gate;
-    this.gate = { scope: context.scope, turn: context.turn, sawBusy: false };
+    this.gate = { scope: context.scope, turn: context.turn, sawBusy: false, at: context.now ?? Date.now() };
     item.state = "sending";
     item.error = null;
     return item;

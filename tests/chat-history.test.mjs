@@ -56,3 +56,58 @@ test('reloading older history preserves message anchors and shifts pending user 
  assert.equal(next.entries[0].key,'history-7-0');assert.equal(pending[0].users,2);
  assert.equal(next.breakAfter,'e1');assert.equal(pending[0].afterKey,'e1');
 });
+
+test('archived parent sessions and non-UTF8 tool output bytes are decoded without crashing',()=>{
+ const s=setup();try{
+  const archDir=join(s.home,'.codex/archived_sessions');mkdirSync(archDir,{recursive:true});
+  const archFile=join(archDir,`rollout-archived-${s.ids[0]}.jsonl`);
+  const meta=Buffer.from(JSON.stringify({type:'session_meta',payload:{id:s.ids[0]}})+'\n');
+  const rawLine=Buffer.concat([Buffer.from('{"type":"message","text":"bad-'),Buffer.from([0xff,0xfe]),Buffer.from('"}\n')]);
+  writeFileSync(archFile,Buffer.concat([meta,rawLine]));
+  s.write(1,{thread_id:s.ids[0],end_byte_offset:meta.length+rawLine.length},s.line('from-child'));
+  const result=s.read(1);
+  assert.equal(result.lines.length,2);
+  assert.ok(JSON.parse(result.lines[0]).text.startsWith('bad-'));
+  assert.equal(JSON.parse(result.lines[1]).text,'from-child');
+ }finally{s.close();}
+});
+
+test('windowed skip_tail pagination stitches multi-window inherited history cleanly on line boundaries',async()=>{
+ const s=setup();try{
+  const end=s.write(0,null,Array.from({length:30},(_,i)=>s.line(`msg-${i}-`+'y'.repeat(80))).join(''));
+  s.write(1,{thread_id:s.ids[0],end_byte_offset:end},s.line('child-end'));
+  const execMock=async(_cmd,args)=>{
+   const out=execFileSync('python3',args,{env:{...process.env,HOME:s.home},encoding:'utf8',maxBuffer:16*1024*1024});
+   return {code:0,stdout:out,stderr:''};
+  };
+  const smallChunkSource=source.replace(/^import .*;\n/gm,'').replace(/export /g,'').replace('const HISTORY_CHUNK = 3 * 1024 * 1024;','const HISTORY_CHUNK = 900;');
+  const inheritedHistory=runInNewContext(smallChunkSource+'\ninheritedHistory',{exec:execMock});
+  const full=s.read(1,100000);
+  const stitched=await inheritedHistory(s.files[1],null,100000);
+  assert.deepEqual(Array.from(stitched.lines),full.lines);
+  assert.equal(stitched.truncated,false);
+  assert.equal(stitched.offset,full.offset);
+ }finally{s.close();}
+});
+
+test('rebaseHistory aligns identical short entries to the recent suffix instead of prepended duplicates',()=>{
+ const rebase=runInNewContext(source.replace(/^import .*;\n/gm,'').replace(/export /g,'')+'\nrebaseHistory');
+ const previous={
+  entries:[{kind:'user',text:'ok',key:'recent-u'},{kind:'assistant',text:'done',key:'recent-a'}],
+  breakAfter:'recent-a',
+ };
+ const next={
+  entries:[
+   {kind:'user',text:'ok',key:'x0'},
+   {kind:'assistant',text:'earlier reply',key:'x1'},
+   {kind:'user',text:'ok',key:'x2'},
+   {kind:'assistant',text:'done',key:'x3'},
+  ],
+ };
+ const pending=[{users:1,afterKey:'recent-a'}];
+ rebase(previous,next,pending,1);
+ assert.equal(next.entries[0].key,'history-1-0');
+ assert.equal(next.entries[2].key,'recent-u');
+ assert.equal(next.entries[3].key,'recent-a');
+ assert.equal(pending[0].users,2);
+});

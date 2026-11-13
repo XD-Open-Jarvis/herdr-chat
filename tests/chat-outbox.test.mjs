@@ -108,3 +108,13 @@ test('explicit retry rejects a different terminal or session and explains blocke
  assert.match(q.retryReason({...idle,status:'blocked'},item.id),/terminal prompt/);
  assert.match(q.retryReason({...idle,scope:null},item.id),/Identify/);
 });
+test('stale turn gate blocks immediate idle poll but expires after 10s if turn never increments',()=>{
+ const q=new Outbox();const first=add(q,'first'),second=add(q,'second');
+ const t0=1_000_000;
+ assert.equal(q.claim({...idle,now:t0}),first);
+ q.finish(first.id,null,false,t0+100);
+ // 2s later, still idle with same turn=3 -> blocked by gate
+ assert.equal(q.claim({...idle,now:t0+2000}),null);
+ // 10.2s later, still idle with same turn=3 (e.g. fast <2s or aborted turn) -> gate expires and releases next item
+ assert.equal(q.claim({...idle,now:t0+10200}),second);
+});

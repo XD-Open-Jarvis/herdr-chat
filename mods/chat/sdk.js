@@ -8,16 +8,29 @@ import { exec } from "herdr";
 // the newest command list Claude announced: it adds plugins' and MCP servers'
 // commands a moment after starting, so with settle > 0 it waits that long for them.
 const PY = `
-import json, subprocess, sys, threading, time, select
-folder, sid, reqs, timeout, settle, delay = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]), float(sys.argv[6])
+import json, os, signal, subprocess, sys, threading, time, select
+folder, sid, reqs, timeout, settle, delay = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), min(float(sys.argv[4]), 28.0), float(sys.argv[5]), float(sys.argv[6])
 args = ["claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--no-session-persistence"]
 if sid: args += ["--resume", sid, "--fork-session"]
-p = subprocess.Popen(args, cwd=folder or None, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-threading.Timer(timeout, p.kill).start()
-time.sleep(delay)
-for i, r in enumerate(reqs):
-    p.stdin.write(json.dumps({"type": "control_request", "request_id": "r%d" % i, "request": r}) + "\\n")
-p.stdin.flush()
+p = subprocess.Popen(args, cwd=folder or None, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+def stop_proc():
+    try: os.killpg(p.pid, signal.SIGKILL)
+    except Exception:
+        try: p.kill()
+        except Exception: pass
+timed_out = [False]
+def on_timeout():
+    timed_out[0] = True
+    stop_proc()
+timer = threading.Timer(max(1.0, timeout), on_timeout)
+timer.daemon = True
+timer.start()
+if delay > 0: time.sleep(min(delay, max(0.0, timeout - 1.0)))
+try:
+    for i, r in enumerate(reqs):
+        p.stdin.write(json.dumps({"type": "control_request", "request_id": "r%d" % i, "request": r}) + "\\n")
+    p.stdin.flush()
+except Exception: pass
 out = [None] * len(reqs)
 commands, done = None, None
 while True:
@@ -30,16 +43,22 @@ while True:
     except ValueError: continue
     if d.get("type") == "system" and d.get("subtype") == "commands_changed": commands = d.get("commands")
     if d.get("type") != "control_response": continue
-    r = d.get("response", {}); i = int(str(r.get("request_id", "r-1"))[1:] or -1)
+    r = d.get("response", {})
+    raw_id = str(r.get("request_id", ""))
+    try: i = int(raw_id[1:]) if raw_id.startswith("r") else -1
+    except ValueError: i = -1
     if 0 <= i < len(out): out[i] = r.get("response") if r.get("subtype") == "success" else {"error": r.get("error", "failed")}
     if done is None and all(x is not None for x in out):
         done = time.time()
         if settle <= 0: break
+timer.cancel()
+if timed_out[0]:
+    out = [x if x is not None else {"error": "Claude didn't answer in time"} for x in out]
 print(json.dumps({"out": out, "commands": commands})); sys.stdout.flush()
 try: p.stdin.close()
 except Exception: pass
-p.kill()
-import os; os._exit(0)
+stop_proc()
+os._exit(0)
 `;
 
 export async function control(folder, session, requests, { on = null, timeout = 45, settle = 0, delay = 0, withCommands = false } = {}) {
@@ -71,8 +90,8 @@ export async function askSide(folder, session, question, history, on) {
 
 // Earlier sessions in a folder, newest first: { id, title, at (ms) }.
 const SESSIONS = `
-import json, os, sys, glob
-d = os.path.expanduser("~/.claude/projects/" + "".join(c if c.isalnum() or c == "-" else "-" for c in sys.argv[1]))
+import json, os, re, sys, glob
+d = os.path.expanduser("~/.claude/projects/" + re.sub(r"[^A-Za-z0-9-]", "-", sys.argv[1]))
 out = []
 for f in sorted(glob.glob(d + "/*.jsonl"), key=os.path.getmtime, reverse=True)[:60]:
     title, first = None, None
@@ -98,14 +117,23 @@ export async function listSessions(folder, on) {
 // Codex: the same through its app-server (JSON-RPC over stdio), as the
 // ChatGPT app does. Each call starts one, asks, and stops it.
 const CODEX_PY = `
-import json, subprocess, sys, threading, os
+import json, signal, subprocess, sys, threading, os
 cwd, mode, arg = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-p = subprocess.Popen(["codex", "app-server"], cwd=cwd or None, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+p = subprocess.Popen(["codex", "app-server"], cwd=cwd or None, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+def stop_proc():
+    try: os.killpg(p.pid, signal.SIGKILL)
+    except Exception:
+        try: p.kill()
+        except Exception: pass
 def bail(o):
-    print(json.dumps(o)); sys.stdout.flush(); p.kill(); os._exit(0)
-threading.Timer(float(arg.get("timeout", 60)), lambda: bail({"error": "Codex didn't answer in time"})).start()
+    print(json.dumps(o)); sys.stdout.flush(); stop_proc(); os._exit(0)
+timer = threading.Timer(min(float(arg.get("timeout", 60)), 28.0), lambda: bail({"error": "Codex didn't answer in time"}))
+timer.daemon = True
+timer.start()
 n = [0]
-def send(o): p.stdin.write(json.dumps(o) + "\\n"); p.stdin.flush()
+def send(o):
+    try: p.stdin.write(json.dumps(o) + "\\n"); p.stdin.flush()
+    except Exception: bail({"error": "Codex stopped"})
 def req(method, params):
     n[0] += 1; send({"jsonrpc": "2.0", "id": n[0], "method": method, "params": params}); i = n[0]
     for line in p.stdout:

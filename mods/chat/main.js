@@ -60,7 +60,12 @@ const activeSpace = () => spaces().find((s) => s.active) ?? null;
 const NEW_SPACE = `
 json, os, shutil, subprocess, sys, time = map(__import__, ("json", "os", "shutil", "subprocess", "sys", "time"))
 spec, tree, extra = map(json.loads, sys.argv[1:4])
-cli = shutil.which("herdr-app") or os.path.expanduser("~/.local/bin/herdr-app")
+cli = next((c for c in (
+    shutil.which("herdr-app"),
+    os.path.expanduser("~/.local/bin/herdr-app"),
+    "/Applications/Herdr.app/Contents/MacOS/Herdr",
+    "/Applications/Agents/Herdr.app/Contents/MacOS/Herdr",
+) if c and os.access(c, os.X_OK)), "herdr-app")
 def call(command, args):
     result = subprocess.run([cli, "do", command, json.dumps(args)], capture_output=True, text=True, check=True)
     reply = json.loads(result.stdout)
@@ -84,6 +89,8 @@ meta = {**extra, "presentation": True, "terminal": local(opened["terminal"]),
         "owner_tab": local(opened["tab"]), "owner_pane": local(targets[0]["pane"])}
 stack = find(tree, "conversation-view")
 page = json.loads(json.dumps(find(tree, "conversation-page")))
+pane_bg = ((find(tree, "main") or {}).get("content", {}).get("pane", {}) or {}).get("background")
+if pane_bg: page["background"] = pane_bg
 key = meta["owner_tab"] + "-" + meta["owner_pane"] + "-" + meta["terminal"]
 def rename(node):
     node["id"] += "-" + key
@@ -185,14 +192,14 @@ export default class Chat extends View {
     this.open = new Set();
     this.images = {};
     this.attach = [];
-    try { this.outbox = new Outbox(JSON.parse(localStorage.getItem("outbox-v1") ?? "{}")); }
-    catch { this.outbox = new Outbox(); }
+    this.loadOutbox();
     this.pending = []; // sent, not yet in the log: { text, files, users } (users: user messages the log had then)
     this.off = 0;
     this.viewH = 0;
     this.contentH = 0;
     this.width = 600;
     this.ticks = 0;
+    this.screenSeq = 0;
     this.catalogs = {};
     this.cmds = null; // the / menu's commands for this agent and folder
     // The side chat (/btw): questions about the conversation, answered by a
@@ -210,8 +217,7 @@ export default class Chat extends View {
     this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
     this.input.on("change", (_e, cx) => {
-      const v = this.input.value(), e = emojify(v);
-      if (e !== v) this.input.set_value(e);
+      this.emojifyInput();
       this.updateEmoji(cx);
       this.updateMention(cx);
       cx.notify();
@@ -262,6 +268,7 @@ export default class Chat extends View {
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
+        if (!this.chatVisible()) continue;
         if (c === "focus") this.input.focus();
         if (c === "search") this.openSearch(cx);
         cx.notify();
@@ -353,7 +360,7 @@ export default class Chat extends View {
     cx.spawn(async (cx) => {
       while (this.streamLoop === loop && this.terminal()?.status === "working" && this.chatVisible()) {
         const r = await hc(["read", this.term, "--lines", "80"]).catch(() => null);
-        if (!this.chatVisible()) break;
+        if (this.streamLoop !== loop || !this.chatVisible()) break;
         const now = r ? live(r.stdout, kind) : null;
         const text = now?.kind === "text" ? now.text : null;
         // Between steps the screen can show nothing new, or only text the chat
@@ -362,12 +369,14 @@ export default class Chat extends View {
         const fresh = text && !this.logged(text);
         const run = now?.kind === "run" ? now : fresh ? null : this.running;
         if (text !== this.stream || JSON.stringify(run) !== JSON.stringify(this.running)) { this.stream = text; this.running = run; cx.notify(); }
-        await exec("sh", ["-c", "sleep 0.35"]);
+        await sleep(cx, 350);
       }
-      if (this.streamLoop === loop) this.streamLoop = null;
-      this.stream = null;
-      this.running = null;
-      if (this.chatVisible()) cx.notify();
+      if (this.streamLoop === loop) {
+        this.streamLoop = null;
+        this.stream = null;
+        this.running = null;
+        if (this.chatVisible()) cx.notify();
+      }
     });
   }
 
@@ -543,24 +552,57 @@ export default class Chat extends View {
     return { rows, pickable, sel: this.menuSel, nav: !m[1] };
   }
 
+  emojifyInput() {
+    const v = this.input.value();
+    if (emojify(v) === v) return;
+    if (typeof this.input.set_selected_range === "function" && typeof this.input.replace === "function") {
+      const tokenRanges = typeof this.input.tokens === "function" ? this.input.tokens().map((t) => t.range) : [];
+      const hits = [];
+      const re = /:([a-z0-9_+-]+):/g;
+      let m;
+      while ((m = re.exec(v))) {
+        const next = emojify(m[0]);
+        const start = m.index, end = start + m[0].length;
+        if (next !== m[0] && !tokenRanges.some((r) => start < r.end && end > r.start)) hits.push({ start, end, next });
+      }
+      for (let i = hits.length - 1; i >= 0; i--) {
+        this.input.set_selected_range({ start: hits[i].start, end: hits[i].end });
+        this.input.replace(hits[i].next);
+      }
+    } else {
+      this.input.set_value(emojify(v));
+    }
+  }
+
+  replaceComposerTail(start, inserted) {
+    if (typeof this.input.set_selected_range === "function" && typeof this.input.replace === "function") {
+      this.input.set_selected_range({ start, end: this.input.value().length });
+      this.input.replace(inserted);
+    } else {
+      const cur = this.input.value();
+      this.input.set_value(cur.slice(0, start) + inserted);
+    }
+  }
+
   // The : menu, as in Slack: after a colon and two letters, the emoji whose
   // names match, to pick one in place of what's typed.
   updateEmoji(cx) {
-    const v = this.input.value().replace(/\n/g, "");
+    const v = this.input.value().replace(/\r?\n$/, "");
     const m = !this.dialog && !this.slash() && this.emojiClosed !== v ? /(^|\s):([a-z0-9_+\-]{2,})$/i.exec(v) : null;
     if (!m) { this.emoji = null; return; }
     if (this.emoji?.v === v) return;
+    const start = m.index + m[1].length;
     cx.spawn(async (cx) => {
       const items = await emojiMatches(m[2], this.emojiUsage);
-      if (this.input.value().replace(/\n/g, "") !== v) return;
-      this.emoji = items.length ? { v, start: v.length - m[2].length - 1, query: m[2], items, sel: 0 } : null;
+      if (this.input.value().replace(/\r?\n$/, "") !== v) return;
+      this.emoji = items.length ? { v, start, query: m[2], items, sel: 0 } : null;
       cx.notify();
     });
   }
 
   emojiMenu() {
     const e = this.emoji;
-    return e && e.v === this.input.value().replace(/\n/g, "") ? e : null;
+    return e && e.v === this.input.value().replace(/\r?\n$/, "") ? e : null;
   }
 
   get emojiUsage() {
@@ -574,8 +616,7 @@ export default class Chat extends View {
     this.emojiUsage[x.char] = (this.emojiUsage[x.char] ?? 0) + 1;
     try { localStorage.setItem("emojiUsage", JSON.stringify(this.emojiUsage)); } catch {}
     this.emoji = null;
-    this.input.set_value("");
-    this.input.replace(e.v.slice(0, e.start) + x.char + " ");
+    this.replaceComposerTail(e.start, x.char + " ");
     this.input.focus();
     cx.notify();
   }
@@ -583,12 +624,13 @@ export default class Chat extends View {
   // The @ menu, as in Claude and ChatGPT: after an @, the files and folders
   // of the agent's project whose paths match, to mention one by its path.
   updateMention(cx) {
-    const v = this.input.value().replace(/\n/g, "");
+    const v = this.input.value().replace(/\r?\n$/, "");
     const m = !this.dialog && !this.slash() && this.mentionClosed !== v ? /(^|\s)@([^\s@]*)$/.exec(v) : null;
     if (!m) { this.mention = null; return; }
     const term = this.terminal();
     const folder = term?.foreground?.cwd ?? term?.cwd;
     if (!folder) return;
+    const start = m.index + m[1].length;
     const show = () => {
       const q = m[2].toLowerCase();
       const files = this.fileList?.paths ?? [];
@@ -597,7 +639,7 @@ export default class Chat extends View {
         return !q ? 0 : base.startsWith(q) ? 0 : base.includes(q) ? 1 : l.includes(q) ? 2 : 9;
       };
       const items = files.map((p) => [score(p), p]).filter(([sc]) => sc < 9).sort((a, b) => a[0] - b[0] || a[1].length - b[1].length || a[1].localeCompare(b[1])).slice(0, 50).map(([, p]) => p);
-      this.mention = { v, start: v.length - m[2].length - 1, query: m[2], items, sel: 0, loading: !this.fileList };
+      this.mention = { v, start, query: m[2], items, sel: 0, loading: !this.fileList };
     };
     show();
     // The project's files: git's list (or a walk outside git), every 30 s at most.
@@ -620,15 +662,14 @@ export default class Chat extends View {
 
   mentionMenu() {
     const e = this.mention;
-    return e && e.v === this.input.value().replace(/\n/g, "") && (e.items.length || e.loading) ? e : null;
+    return e && e.v === this.input.value().replace(/\r?\n$/, "") && (e.items.length || e.loading) ? e : null;
   }
 
   pickMention(path, cx) {
     const e = this.mentionMenu();
     if (!e || !path) return;
     this.mention = null;
-    this.input.set_value("");
-    this.input.replace(e.v.slice(0, e.start) + "@" + path + (path.endsWith("/") ? "" : " "));
+    this.replaceComposerTail(e.start, "@" + path + (path.endsWith("/") ? "" : " "));
     this.input.focus();
     cx.notify();
   }
@@ -838,8 +879,8 @@ export default class Chat extends View {
   }
 
   // Opens a file to edit in a dialog (memory files, settings).
-  editFile(file, title) {
-    openOverlay({ mod: "chat-file", kind: "dialog", width: 820, height: 600, props: { file, title } });
+  editFile(file, title, on = null) {
+    openOverlay({ mod: "chat-file", kind: "dialog", width: 820, height: 600, props: { file, title, on } });
   }
 
   // The cards for /memory, /hooks, /mcp, /skills, /plugin and /config: what
@@ -848,16 +889,14 @@ export default class Chat extends View {
     if (!this.t) return;
     const { kind } = this.current();
     const TITLES = { memory: "Memory", hooks: "Hooks", mcp: "MCP servers", skills: "Skills", plugins: "Plugins", config: "Settings" };
-    this.t.push({ kind: "user", command: true, text: `/${name}`, images: [] });
-    const e = this.t.push({ kind: "card", card: "info", title: TITLES[what], loading: true, sections: [], buttons: [] });
+    this.t.push({ kind: "user", command: true, ephemeral: true, text: `/${name}`, images: [] });
+    const e = this.t.push({ kind: "card", card: "info", ephemeral: true, title: TITLES[what], loading: true, sections: [], buttons: [] });
     this.off = 0;
     const term = this.terminal();
     const folder = term?.foreground?.cwd ?? term?.cwd ?? "";
     const on = machineOf(this.term);
-    const H = home();
     const say = (text) => (_e, cx) => { this.deliverCommand(text, cx); this.openPanel(text, cx, true); cx.notify(); };
-    const edit = (file, title) => () => this.editFile(file, title);
-    const ancestors = (f) => { const out = []; let d = f; while (d && d !== "/" && d.startsWith(H) && d !== H) { out.push(d); d = d.replace(/\/[^/]+$/, ""); } return out.reverse(); };
+    const edit = (file, title) => () => this.editFile(file, title, on);
     const sizes = async (files) => {
       const r = await exec("sh", ["-c", 'for f; do [ -f "$f" ] && printf "%s\\t%s\\n" "$f" "$(wc -c < "$f" | tr -d " ")"; done; true', "sh", ...files], { on });
       return Object.fromEntries(r.stdout.split("\n").filter(Boolean).map((l) => l.split("\t")));
@@ -865,6 +904,8 @@ export default class Chat extends View {
     const kb = (n) => (n > 1024 ? `${(n / 1024).toFixed(1)} KB` : `${n} bytes`);
     cx.spawn(async (cx) => {
       try {
+        const H = on ? ((await exec("sh", ["-c", 'printf "%s" "$HOME"'], { on }).catch(() => null))?.stdout || home()) : home();
+        const ancestors = (f) => { const out = []; let d = f; while (d && d !== "/" && d.startsWith(H) && d !== H) { out.push(d); d = d.replace(/\/[^/]+$/, ""); } return out.reverse(); };
         if (what === "memory") {
           const files = kind === "codex"
             ? [[`${H}/.codex/AGENTS.md`, "Global"], ...ancestors(folder).flatMap((d) => [[`${d}/AGENTS.md`, d === folder ? "This project" : "Parent folder"], [`${d}/AGENTS.override.md`, "Override"]])]
@@ -952,8 +993,8 @@ export default class Chat extends View {
   // its answer (not sent to the agent, and gone when the chat reloads).
   hostCard(card, cx) {
     if (!this.t) return;
-    this.t.push({ kind: "user", command: true, text: `/${card}`, images: [] });
-    const e = this.t.push({ kind: "card", card, loading: true });
+    this.t.push({ kind: "user", command: true, ephemeral: true, text: `/${card}`, images: [] });
+    const e = this.t.push({ kind: "card", card, ephemeral: true, loading: true });
     this.off = 0;
     const term = this.terminal();
     const folder = term?.foreground?.cwd ?? term?.cwd ?? null;
@@ -1142,11 +1183,15 @@ export default class Chat extends View {
   }
 
   setTerm(address, cx) {
-    this.terminalId = localId(address);
+    const nextId = localId(address);
+    const changed = nextId !== this.terminalId;
+    this.terminalId = nextId;
+    if (changed) this.loadOutbox();
     this.sig = null;
     this.file = null;
     this.t = null;
     this.chosen = null;
+    this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
     this.gen++;
     this.check(cx);
     cx.notify();
@@ -1192,6 +1237,7 @@ export default class Chat extends View {
     this.attention ??= new ChatAttention();
     const identitySource = `${this.term}:${term?.foreground?.pid}`;
     if (this.sourceAddress !== identitySource) {
+      const prevAddress = this.sourceAddress;
       this.sourceAddress = identitySource;
       this.sessionResolved = false;
       this.waitingForLog = false;
@@ -1204,6 +1250,7 @@ export default class Chat extends View {
       this.streamLoop = null;
       this.stream = null;
       this.running = null;
+      if (prevAddress !== undefined) this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
     }
     const kind = agentKind(term);
     const titleIdentity = kind === "codex" && codexTitleIdentity(term);
@@ -1257,7 +1304,7 @@ export default class Chat extends View {
             const screen = titleIdentity ? { stdout: "" } : await hc(["read", term.address]);
             const result = await resolveSession(term, screen.stdout, file, previous?.file);
             if (!stillCurrent()) return;
-            waitingForLog = result.evidence === "title" && result.matchCount === 0;
+            waitingForLog = result.evidence === "title" && result.matchCount === 0 && !result.subagent;
             const next = chooseBinding(previous, result, process);
             this.binding = next;
             file = next?.file ?? null;
@@ -1304,8 +1351,10 @@ export default class Chat extends View {
     const started = ["working", "idle", "done"].includes(term?.status);
     if (term?.status === "blocked" || (term && !this.t && term.state === "live" && !started)) {
       this.idleAsk = null;
+      const seq = ++this.screenSeq;
       cx.spawn(async (cx) => {
         const r = await hc(["read", this.term, "--lines", "40"]);
+        if (seq !== this.screenSeq) return;
         this.screen = r.stdout.replace(/\s+$/, "");
         this.trustFolder();
         cx.notify();
@@ -1313,8 +1362,10 @@ export default class Chat extends View {
     } else if (this.t && ["idle", "done", "error"].includes(term?.status) && !this.panelLive()) {
       // A menu the agent opens on its own once a turn ends (an offer, a setup
       // form) doesn't report "blocked": only the screen shows it.
+      const seq = ++this.screenSeq;
       cx.spawn(async (cx) => {
         const r = await hc(["read", this.term, "--lines", "40"]);
+        if (seq !== this.screenSeq) return;
         const screen = r.stdout.replace(/\s+$/, "");
         const ask = menuAtBottom(screen);
         if (!ask && !this.idleAsk) return;
@@ -1324,6 +1375,7 @@ export default class Chat extends View {
         cx.notify();
       });
     } else if (this.screen) {
+      this.screenSeq++;
       this.screen = null;
       this.idleAsk = null;
       cx.notify();
@@ -1339,6 +1391,7 @@ export default class Chat extends View {
     const yes = q ? q.options.findIndex((o) => /^(yes\b.*\btrust|trust and continue)/i.test(o)) : -1;
     if (yes < 0) return;
     this.trusted = true;
+    this.screenSeq++;
     this.screen = null;
     hc(["keys", this.term, ...choose(q.selected, yes)]);
   }
@@ -1449,13 +1502,31 @@ export default class Chat extends View {
     return { scope: verified ? outboxScope(term, session) : null, status: this.idleAsk ? "blocked" : term?.status, turn: term?.turn };
   }
 
+  loadOutbox() {
+    if (this.dialog) { this.outbox = new Outbox(); this.outboxKey = null; return; }
+    const key = this.terminalId ? `outbox-v1:${this.terminalId}` : "outbox-v1";
+    this.outboxKey = key;
+    this.savedOutbox = null;
+    try {
+      let raw = localStorage.getItem(key);
+      if (raw == null && this.terminalId) {
+        const legacy = JSON.parse(localStorage.getItem("outbox-v1") ?? "{}");
+        const items = (legacy.items ?? []).filter((x) => x.scope?.split(":")[0] === this.terminalId);
+        const gate = legacy.gate?.scope?.split(":")[0] === this.terminalId ? legacy.gate : null;
+        if (items.length || gate) raw = JSON.stringify({ items, gate });
+      }
+      this.outbox = new Outbox(JSON.parse(raw ?? "{}"));
+    } catch { this.outbox = new Outbox(); }
+  }
+
   saveOutbox() {
     if (!this.outbox.items.length) {
-      this.outboxExpanded = false; this.outboxHovered = null; this.outboxHeight = null; this.outboxOffset = 0;
+      this.outboxExpanded = null; this.outboxHovered = null; this.outboxHeight = null; this.outboxOffset = 0;
     }
+    if (!this.outboxKey) return;
     const value = JSON.stringify(this.outbox);
     if (value !== this.savedOutbox) {
-      localStorage.setItem("outbox-v1", value);
+      localStorage.setItem(this.outboxKey, value);
       this.savedOutbox = value;
     }
   }
@@ -1474,7 +1545,7 @@ export default class Chat extends View {
     const target = this.term;
     if (["idle", "done"].includes(context.status)) { this.stream = null; this.running = null; }
     const pending = { ...item, files: item.paths.length, users: this.userCount(),
-      afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now(), delivering: true };
+      afterKey: this.t?.entries.findLast((e) => !e.ephemeral)?.key ?? null, at: Date.now(), delivering: true };
     this.pending.push(pending);
     this.t?.markInput();
     cx.notify();
@@ -1488,8 +1559,12 @@ export default class Chat extends View {
         if (!ok) error = this.error || "Message was not sent.";
       } catch (e) { error = String(e?.message ?? e); paused = Boolean(e?.queuePaused); }
       pending.delivering = false;
+      pending.at = Date.now();
       this.outbox.finish(item.id, error, paused);
-      if (error) this.pending = this.pending.filter(message => message !== pending);
+      if (error) {
+        this.pending = this.pending.filter(message => message !== pending);
+        if (!paused && !item.direct) this.outboxExpanded = true;
+      }
       this.saveOutbox();
       cx.notify();
     });
@@ -1517,16 +1592,18 @@ export default class Chat extends View {
     const items = this.outbox.visibleItems;
     if (!items.length) return null;
     const context = this.queueContext();
+    const hasError = items.some((item) => item.state === "error");
+    const expanded = Boolean(this.outboxExpanded ?? hasError);
     const height = Math.min(240, this.outboxHeight ?? items.length * 80);
     const offset = Math.max(0, Math.min(this.outboxOffset ?? 0, (this.outboxHeight ?? height) - height));
     return h_flex().w_full().justify_center().child(v_flex().id("outbox").w_full().max_w(900)
       .rounded(18).overflow_hidden()
       .child(h_flex().id("outbox-toggle").w_full().px(12).py(9).gap(8).items_center().justify_end()
-        .cursor_pointer().text_size(12).text_color(t.muted).hover(style => style.text_color(t.foreground))
-        .on_click((_e, cx) => { this.outboxExpanded = !this.outboxExpanded; this.outboxHovered = null; cx.notify(); })
-        .child(`${items.length} queued`)
-        .child(div().text_size(11).child(this.outboxExpanded ? "▴" : "▾")))
-      .when(Boolean(this.outboxExpanded), el => el.border_1().border_color(t.input).child(div().id("outbox-scroll").w_full()
+        .cursor_pointer().text_size(12).text_color(hasError ? t.blocked : t.muted).hover(style => style.text_color(t.foreground))
+        .on_click((_e, cx) => { this.outboxExpanded = !expanded; this.outboxHovered = null; cx.notify(); })
+        .child(hasError ? `${items.length} queued · delivery failed` : `${items.length} queued`)
+        .child(div().text_size(11).child(expanded ? "▴" : "▾")))
+      .when(expanded, el => el.border_1().border_color(hasError ? t.blocked : t.input).child(div().id("outbox-scroll").w_full()
         .h(height).flex_none().relative().overflow_hidden().border_t(1).border_color(t.border)
         .on_scroll_wheel((e, cx) => {
           this.outboxOffset = Math.max(0, Math.min(offset - e.delta.y, (this.outboxHeight ?? height) - height));
@@ -1541,7 +1618,7 @@ export default class Chat extends View {
           .children(items.map((item) => {
             const paused = context.scope !== item.scope;
             const unavailable = paused || !["idle", "done", "working", "error"].includes(context.status);
-            const hovered = this.outboxHovered === item.id;
+            const hovered = this.outboxHovered === item.id || item.state === "error";
             return h_flex().id(`outbox-${item.id}`).w_full().min_h(44).flex_none().relative().px(12).py(10).gap(10).items_center()
               .on_hover((on, cx) => {
                 if (on) this.outboxHovered = item.id;
@@ -1559,10 +1636,10 @@ export default class Chat extends View {
               // Reserve the action gutter so hover never reflows the message.
               .child(h_flex().w(90).h(18).flex_none().gap(4).items_center().justify_end()
                 .when(hovered && item.state !== "sending", row => row
-                  .child(div().id(`outbox-send-${item.id}`).flex_none().h(18).px(8).rounded_full().border_1().border_color(t.input)
+                  .child(div().id(`outbox-send-${item.id}`).flex_none().h(18).px(8).rounded_full().border_1().border_color(item.state === "error" ? t.blocked : t.input)
                     .flex().items_center().justify_center().cursor_pointer().text_size(10).text_color(t.foreground)
                     .hover(style => style.border_color(t.accent).text_color(t.accent))
-                    .on_click((_e, cx) => this.pumpOutbox(cx, item.id)).child("Instant")
+                    .on_click((_e, cx) => this.pumpOutbox(cx, item.id)).child(item.state === "error" ? "Retry" : "Instant")
                     .when(unavailable, button => button.opacity(0.4)))
                   .child(div().id(`outbox-remove-${item.id}`).cursor_pointer().px(4).text_color(t.muted)
                     .on_click((_e, cx) => { this.outbox.remove(item.id); this.saveOutbox(); cx.notify(); }).child("×"))));
@@ -1570,16 +1647,16 @@ export default class Chat extends View {
   }
 
   userCount() {
-    return (this.t?.entries ?? []).filter((e) => e.kind === "user").length;
+    return (this.t?.entries ?? []).filter((e) => e.kind === "user" && !e.command).length;
   }
 
   // Sent messages leave the queue once the log records them: a user message
   // added since, with the same text (files only: any new one).
   settle() {
-    const users = (this.t?.entries ?? []).filter((e) => e.kind === "user");
+    const users = (this.t?.entries ?? []).filter((e) => e.kind === "user" && !e.command);
     // One the log never matched goes once the agent has been idle a while.
     const busy = ["working", "blocked"].includes(this.terminal()?.status);
-    this.pending = this.pending.filter((p) => busy || Date.now() - p.at < 15000);
+    this.pending = this.pending.filter((p) => p.delivering || busy || Date.now() - p.at < 15000);
     const used = new Set();
     this.pending = this.pending.filter((p) => {
       const i = users.findIndex((u, n) => n >= p.users && !used.has(n) && (p.text ? Boolean(u.text?.includes(p.text.slice(0, 60))) : true));
@@ -1684,7 +1761,8 @@ export default class Chat extends View {
     this.images[img.ref] = "pending";
     cx.spawn(async (cx) => {
       try {
-        const ext = img.ext ?? (img.path.split(".").pop() || "png").toLowerCase();
+        const base = (img.path ?? "").split(/[\\/]/).pop() ?? "";
+        const ext = img.ext ?? (base.includes(".") ? base.split(".").pop().toLowerCase() : "png");
         const rel = `${CACHE}/${img.ref}.${ext}`, abs = `${appHome()}/${rel}`;
         if (img.data) await fs.writeFile(abs, Buffer.from(img.data, "base64"));
         else if (on) {
@@ -1751,13 +1829,27 @@ export default class Chat extends View {
       return cx.notify();
     }
     // Slash commands and ! lines are logged as notes, not messages: no bubble for them.
+    let directPending = null;
     if (!/^[\/!]/.test(text)) {
-      this.pending.push({ text, files: files.length, attachments, users: this.userCount(),
-        afterKey: this.t?.entries.at(-1)?.key ?? null, at: Date.now() });
+      directPending = { text, files: files.length, attachments, users: this.userCount(),
+        afterKey: this.t?.entries.findLast((e) => !e.ephemeral)?.key ?? null, at: Date.now(), delivering: true };
+      this.pending.push(directPending);
       this.t?.markInput();
     }
     this.stream = null; this.running = null;
-    cx.spawn(async (cx) => this.deliver(text, files, cx));
+    cx.spawn(async (cx) => {
+      try {
+        const ok = await this.deliver(text, files, cx);
+        if (directPending) {
+          directPending.delivering = false;
+          directPending.at = Date.now();
+          if (ok === false) this.pending = this.pending.filter((p) => p !== directPending);
+        }
+      } catch {
+        if (directPending) this.pending = this.pending.filter((p) => p !== directPending);
+      }
+      cx.notify();
+    });
     // A command that opens a picker or panel there: show it here, live.
     if (cmd?.picker || /^\/\S+/.test(text)) this.openPanel(text, cx, !cmd?.picker);
     cx.notify();
@@ -1766,14 +1858,17 @@ export default class Chat extends View {
   async deliver(text, files, cx, options = {}) {
     const target = options.target ?? this.term;
     if (options.valid && !options.valid()) throw new Error("The conversation changed; message remains queued.");
-    if (agentKind(this.terminal()) === "codex" && /^\/(?:resume|fork|new|clear)(?:\s|$)/.test(text)) {
-      const key = bindingKey(this.owner, this.terminalId);
-      const records = { ...(shared("chat.bindings") ?? {}) };
-      if (key) { delete records[key]; setShared("chat.bindings", records); }
-      this.binding = null; this.sessionResolved = false;
-      this.bindingEpoch = (this.bindingEpoch ?? 0) + 1;
-      this.gen++; this.file = null; this.t = null; this.sig = null;
-      this.streamLoop = null; this.stream = null; this.running = null;
+    if (/^\/(?:resume|fork|new|clear|reset)(?:\s|$)/.test(text)) {
+      this.side = { open: false, items: [], off: 0, viewH: 0, contentH: 0 };
+      if (agentKind(this.terminal()) === "codex") {
+        const key = bindingKey(this.owner, this.terminalId);
+        const records = { ...(shared("chat.bindings") ?? {}) };
+        if (key) { delete records[key]; setShared("chat.bindings", records); }
+        this.binding = null; this.sessionResolved = false;
+        this.bindingEpoch = (this.bindingEpoch ?? 0) + 1;
+        this.gen++; this.file = null; this.t = null; this.sig = null;
+        this.streamLoop = null; this.stream = null; this.running = null;
+      }
     }
     const paths = [];
     for (const f of files) {
@@ -1877,9 +1972,14 @@ export default class Chat extends View {
   }
 
   // Switches the running session's model or effort.
-  applyModel(model, effort, cx) {
-    const kind = this.t?.kind ?? agentKind(this.terminal());
+  applyModel(model, effort, cx, term = null) {
+    const live = term ?? (() => { try { return this.terminal?.(); } catch { return null; } })();
+    const kind = this.t?.kind ?? agentKind(live);
     if (!kind || this.switching) return;
+    if (kind === "claude" && ["working", "blocked"].includes(live?.status)) {
+      this.error = "Wait for Claude to finish the current turn before switching model or effort.";
+      return cx.notify();
+    }
     const cur = this.current();
     this.switching = true;
     cx.spawn(async (cx) => {
@@ -2493,7 +2593,7 @@ export default class Chat extends View {
           : svg("mods/chat/icons/chevron-down.svg").size(12)));
     const efforts = cat?.models.find((m) => m.id === model)?.efforts
       ?? (kind === "claude" ? CLAUDE_EFFORTS : []);
-    const pick = (m, e) => (_ev, cx) => { this.showModels = false; this.applyModel(m, e, cx); };
+    const pick = (m, e) => (_ev, cx) => { this.showModels = false; this.applyModel(m, e, cx, term); };
     const heading = (text) => div().px(10).pt(8).pb(4).text_size(11).font_semibold().text_color(t.dim).child(text);
     const item = (id, text, selected, action) => h_flex().id(id).px(10).py(5).gap(8).rounded(6).cursor_pointer().text_size(12.5)
       .text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click(action)
@@ -2619,7 +2719,7 @@ export default class Chat extends View {
         h_flex().id(`choice-${n}`).px(12).py(8).gap(10).rounded(8).cursor_pointer().border_1()
           .border_color(n === q.selected ? t.accent : t.border).bg(n === q.selected ? t.selected : t.surface)
           .hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { hc(["keys", this.term, ...choose(q.selected, n)]); this.screen = this.idleAsk = null; cx.notify(); })
+          .on_click((_e, cx) => { hc(["keys", this.term, ...choose(q.selected, n)]); this.screenSeq++; this.screen = this.idleAsk = null; cx.notify(); })
           .child(div().flex_none().w(16).text_color(t.dim).child(String(n + 1)))
           .child(div().flex_1().text_size(12.5).child(o))))))
       .when(!q && lines.length > 0, (el) => el.child(div().text_size(11.5).text_color(t.muted)

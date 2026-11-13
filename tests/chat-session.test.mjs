@@ -71,3 +71,12 @@ test('duplicate primary root conversations remain ambiguous',()=>fixture(({resol
  writeFileSync(files[0].replace(ids[0],other),JSON.stringify({type:'session_meta',payload:{id:other,cwd:'/repo',source:'cli'}})+'\n'+records);
  assert.equal(resolve(first+'\n'+second).file,null);
 }));
+
+test('subagent title match reports subagent=true while a brand-new root title reports subagent=false',()=>fixture(({resolve,files,ids})=>{
+ const sub='77777777-7777-7777-7777-777777777777';
+ writeFileSync(files[0].replace(ids[0],sub),JSON.stringify({type:'session_meta',payload:{id:sub,cwd:'/repo',parent_thread_id:ids[0]}})+'\n');
+ const subRes=resolve('',{prefix:sub,complete:true});
+ assert.equal(subRes.file,null);assert.equal(subRes.matchCount,0);assert.equal(subRes.subagent,true);
+ const freshRes=resolve('',{prefix:'88888888-8888-8888-8888-888888888888',complete:true});
+ assert.equal(freshRes.file,null);assert.equal(freshRes.matchCount,0);assert.equal(freshRes.subagent,false);
+}));

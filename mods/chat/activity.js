@@ -17,9 +17,16 @@ function tokens(source) {
           if(c==='\n')continue;
           const escapes={n:'\n',r:'\r',t:'\t',b:'\b',f:'\f',v:'\v','0':'\0'};
           if(c==='u'||c==='x') {
-            const length=c==='u'?4:2, hex=source.slice(i,i+length);
-            if(!new RegExp(`^[0-9a-fA-F]{${length}}$`).test(hex))valid=false;
-            else {value+=String.fromCharCode(parseInt(hex,16));i+=length;}
+            if(c==='u'&&source[i]==='{') {
+              const close=source.indexOf('}',i+1), hex=close>i+1?source.slice(i+1,close):'';
+              const cp=/^[0-9a-fA-F]{1,6}$/.test(hex)?parseInt(hex,16):-1;
+              if(cp<0||cp>0x10ffff)valid=false;
+              else{value+=String.fromCodePoint(cp);i=close+1;}
+            } else {
+              const length=c==='u'?4:2, hex=source.slice(i,i+length);
+              if(!new RegExp(`^[0-9a-fA-F]{${length}}$`).test(hex))valid=false;
+              else {value+=String.fromCharCode(parseInt(hex,16));i+=length;}
+            }
           } else value+=escapes[c]??c??'';
         } else value+=c;
       }
@@ -54,7 +61,7 @@ function calls(source) {
 }
 export function patchChanges(patch) {
   const files=[];let file=null;
-  for(const line of patch.split('\n')) {
+  for(const line of patch.replace(/\r\n/g,'\n').split('\n')) {
     const header=/^\*\*\* (Update|Add|Delete) File: (.+)$/.exec(line);
     if(header) {
       file={path:header[2],added:header[1]==='Delete'?null:0,removed:header[1]==='Delete'?null:0,diff:[],operation:header[1].toLowerCase()};
@@ -102,11 +109,12 @@ export function toolDetails(item) {
     const patches=actions.filter(action=>action.name==='apply_patch').map(action=>action.input);
     const displayInput=changes.length?(patches.length?[...patches,...commands].join('\n'):input)
       :commands.length?commands.join('\n'):input;
-    known={source:item.input,name:item.name,details:{name,summary,changes,commands,displayInput}};cache.set(item,known);
+    known={source:item.input,name:item.name,wrapper,isPatch:patches.length>0,details:{name,summary,changes,commands,displayInput}};cache.set(item,known);
   }
   const result = typeof item.result === 'string' ? item.result : '';
-  const failed = Boolean(item.error) || /(?:^|\n)(?:Error:|apply_patch verification failed:|Failed to find expected lines)/i.test(result)
-    || /"(?:isError)"\s*:\s*true|"exit_code"\s*:\s*[1-9]\d*/.test(result);
+  const patchFailed = known.isPatch && /(?:^|\n)(?:apply_patch verification failed:|Failed to find expected lines|Error:)/i.test(result);
+  const wrapperFailed = known.wrapper && (/(?:^|\n)Error:/i.test(result) || /"(?:isError)"\s*:\s*true|"exit_code"\s*:\s*[1-9]\d*/.test(result));
+  const failed = Boolean(item.error) || patchFailed || wrapperFailed;
   return {...item,...known.details,error:failed};
 }
 export function withChanges(entries) {

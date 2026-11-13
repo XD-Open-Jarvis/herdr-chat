@@ -4,9 +4,11 @@ import { exec } from "herdr";
 // come from Codex metadata and apply before decoding JSONL records.
 export const HISTORY_PY = `
 import json, pathlib, sys
-root = pathlib.Path.home() / ".codex" / "sessions"
+codex_home = pathlib.Path.home() / ".codex"
+roots = [p for p in (codex_home / "sessions", codex_home / "archived_sessions") if p.exists()]
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 4 * 1024 * 1024
-if limit <= 0: raise ValueError("Invalid history limit")
+skip_tail = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+if limit <= 0 or skip_tail < 0: raise ValueError("Invalid history limit")
 seen = set()
 index = None
 def inherited(path, bound=None):
@@ -28,9 +30,10 @@ def inherited(path, bound=None):
                 raise RuntimeError("Invalid Codex inherited history boundary")
             if index is None:
                 index = {}
-                for candidate in root.rglob("rollout-*.jsonl"):
-                    key = candidate.name[-42:-6]
-                    index.setdefault(key, []).append(candidate)
+                for root in roots:
+                    for candidate in root.rglob("rollout-*.jsonl"):
+                        key = candidate.name[-42:-6]
+                        index.setdefault(key, []).append(candidate)
             matches = index.get(parent_id, [])
             if len(matches) != 1: raise RuntimeError("Parent Codex conversation is missing or ambiguous")
             parent = matches[0]
@@ -57,34 +60,66 @@ segments = inherited(leaf, offset)
 # Keep a bounded suffix of the combined inherited history, as the normal reader
 # does for long conversations. Always discard an incomplete first JSONL record.
 remaining = limit
+to_skip = skip_tail
 chunks = []
 truncated = False
 for path, start, end in reversed(segments):
+    seg_len = end - start
+    if to_skip >= seg_len:
+        to_skip -= seg_len
+        continue
+    eff_end = end - to_skip
+    to_skip = 0
     if remaining <= 0:
         truncated = True
         break
-    length = end - start
+    length = eff_end - start
     take = min(length, remaining)
     with path.open("rb") as stream:
-        stream.seek(end - take)
-        data = stream.read(take)
-    if take < length:
-        data = data.partition(b"\\n")[2]
-        truncated = True
+        if take < length:
+            stream.seek(eff_end - take - 1)
+            prev = stream.read(1)
+            data = stream.read(take)
+            if prev != b"\\n":
+                data = data.partition(b"\\n")[2]
+            truncated = True
+        else:
+            stream.seek(start)
+            data = stream.read(take)
     chunks.append(data)
     remaining -= take
-print(json.dumps({"lines": b"".join(reversed(chunks)).decode("utf-8").splitlines(),
+consumed = sum(len(c) for c in chunks)
+print(json.dumps({"lines": b"".join(reversed(chunks)).decode("utf-8", errors="replace").splitlines(),
                   "offset": offset,
-                  "truncated": truncated}))
+                  "truncated": truncated,
+                  "nextSkip": skip_tail + consumed}))
 `;
 
+const HISTORY_WINDOW = 3 * 1024 * 1024;
+
 export async function inheritedHistory(file, on, bytes = 4 * 1024 * 1024) {
-  const result = await exec("python3", ["-c", HISTORY_PY, file, String(bytes)], { on });
-  if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read inherited conversation");
-  return JSON.parse(result.stdout);
+  const batches = [];
+  let remaining = bytes, skip = 0, leafOffset = 0, truncated = false;
+  while (remaining > 0) {
+    const step = Math.min(remaining, HISTORY_WINDOW);
+    const args = skip > 0 ? ["-c", HISTORY_PY, file, String(step), String(skip)] : ["-c", HISTORY_PY, file, String(step)];
+    const result = await exec("python3", args, { on });
+    if (result.code !== 0) throw new Error(result.stderr.trim() || "Could not read inherited conversation");
+    const page = JSON.parse(result.stdout);
+    if (skip === 0) leafOffset = page.offset;
+    batches.push(page.lines);
+    truncated = Boolean(page.truncated);
+    const consumed = (page.nextSkip ?? skip) - skip;
+    if (!truncated || consumed <= 0) break;
+    skip = page.nextSkip;
+    remaining -= consumed;
+  }
+  return { lines: batches.reverse().flat(), offset: leafOffset, truncated };
 }
 
 // Rebuilding a larger log suffix must retain existing message/tool anchors.
+// Match from the newest entry backwards so duplicate short messages ("ok",
+// "Worked for 2s") align to the recent suffix rather than older prepended turns.
 export function rebaseHistory(previous, next, pending, generation) {
   const signature = entry => JSON.stringify([entry.kind, entry.text, entry.items?.map(item => item.id)]);
   const positions = new Map();
@@ -94,18 +129,27 @@ export function rebaseHistory(previous, next, pending, generation) {
     positions.get(key).push(index);
     entry.key = `history-${generation}-${index}`;
   });
-  let cursor = 0, prefixUsers = null, previousUsers = 0;
-  for (const entry of previous.entries) {
-    const usersBefore = previousUsers;
-    if (entry.kind === "user") previousUsers++;
-    const candidates = positions.get(signature(entry));
-    while (candidates?.length && candidates[0] < cursor) candidates.shift();
-    if (!candidates?.length) continue;
-    const index = candidates.shift();
-    if (prefixUsers == null) prefixUsers = Math.max(0, next.entries.slice(0, index).filter(item => item.kind === "user").length - usersBefore);
-    next.entries[index].key = entry.key;
-    cursor = index + 1;
+  const isUser = item => item.kind === "user" && !item.command;
+  const usersBefore = new Array(previous.entries.length);
+  let count = 0;
+  for (let i = 0; i < previous.entries.length; i++) {
+    usersBefore[i] = count;
+    if (isUser(previous.entries[i])) count++;
   }
-  for (const message of pending) message.users += prefixUsers ?? 0;
+  let upper = next.entries.length, earliestMatch = null;
+  for (let i = previous.entries.length - 1; i >= 0; i--) {
+    const entry = previous.entries[i];
+    const candidates = positions.get(signature(entry));
+    while (candidates?.length && candidates[candidates.length - 1] >= upper) candidates.pop();
+    if (!candidates?.length) continue;
+    const index = candidates.pop();
+    next.entries[index].key = entry.key;
+    upper = index;
+    earliestMatch = { index, before: usersBefore[i] };
+  }
+  const prefixUsers = earliestMatch
+    ? Math.max(0, next.entries.slice(0, earliestMatch.index).filter(isUser).length - earliestMatch.before)
+    : 0;
+  for (const message of pending) message.users += prefixUsers;
   next.breakAfter = previous.breakAfter;
 }

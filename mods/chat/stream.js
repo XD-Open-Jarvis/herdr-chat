@@ -19,7 +19,7 @@ export function live(screen, kind) {
   const lines = (screen ?? "").split("\n").filter((l) => !l.startsWith("[hc]"));
   // The message box at the bottom: its rule line (Claude) or its prompt (Codex).
   let end = lines.length;
-  if (kind === "codex") { for (let i = lines.length - 1; i >= 0; i--) if (/^› /.test(lines[i])) { end = i; break; } }
+  if (kind === "codex") { for (let i = lines.length - 1; i >= 0; i--) if (/^›(?:\s|$)/.test(lines[i])) { end = i; break; } }
   else for (let i = lines.length - 1; i > 0; i--) if (/^─{10,}/.test(lines[i]) && /^❯/.test(lines[i + 1] ?? "")) { end = i; break; }
   // This turn: after the last message sent.
   let from = 0;

@@ -6,6 +6,27 @@ import { props, theme, settings, readTextFile, writeTextFile, closeOverlay, exec
 
 const LANG = { md: "markdown", json: "json", toml: "toml", js: "javascript", sh: "bash", yaml: "yaml", yml: "yaml" };
 
+const REMOTE_SAVE_PY = `
+import json, os, pathlib, sys, tempfile
+path = pathlib.Path(sys.argv[1])
+text = sys.argv[2]
+expected = json.loads(sys.argv[3])
+current = path.read_text("utf-8") if path.exists() else None
+if current != expected:
+    sys.stderr.write("File changed on disk before saving; reopen to merge.\\n")
+    sys.exit(2)
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".herdr-save-")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(tmp, path)
+except Exception:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
+`;
+
 export function imageFit(viewport, width, height) {
   return Math.min(1, Math.max(1, viewport.width - 24) / Math.max(1, width),
     Math.max(1, viewport.height - 24) / Math.max(1, height));
@@ -34,6 +55,7 @@ export default class ChatFile extends View {
       return;
     }
     this.file = p.file;
+    this.on = p.on || null;
     this.saved = null; // the text on disk, once read (null: a new file)
     this.status = "Opening…";
     const t = theme();
@@ -46,7 +68,7 @@ export default class ChatFile extends View {
     this.handle = cx.focus_handle();
     try { cx.bind_keys([{ keystroke: "cmd-s", action: "chat_file_save", context: "ChatFile" }]); } catch {}
     cx.spawn(async (cx) => {
-      const text = await readTextFile(this.file).catch(() => null);
+      const text = await readTextFile(this.file, { on: this.on }).catch(() => null);
       this.saved = text;
       this.code.set_value(text ?? "");
       this.status = text == null ? "New file" : "";
@@ -58,8 +80,13 @@ export default class ChatFile extends View {
     const text = this.code.value();
     cx.spawn(async (cx) => {
       try {
-        await exec("mkdir", ["-p", this.file.replace(/\/[^/]*$/, "")]);
-        await writeTextFile(this.file, text, this.saved);
+        if (this.on) {
+          const r = await exec("python3", ["-c", REMOTE_SAVE_PY, this.file, text, JSON.stringify(this.saved)], { on: this.on });
+          if (r.code !== 0) throw new Error(r.stderr.trim() || "Could not save remote file");
+        } else {
+          await exec("mkdir", ["-p", this.file.replace(/\/[^/]*$/, "")]);
+          await writeTextFile(this.file, text, this.saved);
+        }
         this.saved = text;
         this.status = "Saved";
       } catch (e) {
@@ -67,6 +94,10 @@ export default class ChatFile extends View {
       }
       cx.notify();
     });
+  }
+
+  close() {
+    this.code?.release();
   }
 
   zoomImage(scale, cx, point = null) {

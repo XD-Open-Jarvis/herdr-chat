@@ -74,11 +74,11 @@ export default class Preview extends View {
   const header=(file,index,sticky=false)=>h_flex().h(FILE_HEADER).flex_none().w_full().px(12).gap(8).items_center().bg(t.background).border_b(1).border_color(t.border)
    .cursor_pointer().on_click((_event,cx)=>toggleFile(file,index,cx))
    .child(div().flex_1().min_w(0).truncate().text_size(13).font_semibold().tooltip(file.path)
-    .cursor_pointer().on_click((event,cx)=>{event.stop_propagation();toggleFile(file,index,cx);})
+    .cursor_pointer().on_click((_event,cx)=>{cx.stop_propagation();toggleFile(file,index,cx);})
     .child(`${this.diffCollapsed.has(file.path)?'▸':'▾'} ${file.path.split(/[\\/]/).at(-1)}`))
    .when(file.added!=null,el=>el.child(div().text_size(12).text_color(t.ansi2).child(`+${file.added}`)))
    .when(file.removed!=null,el=>el.child(div().text_size(12).text_color(t.ansi1).child(`−${file.removed}`)))
-   .child(button(`collection-file-${sticky?'sticky':index}`,"File",(event,cx)=>{event.stop_propagation();this.update(key,{file:file.file??file.path,change:file,mode:"source"});}));
+   .child(button(`collection-file-${sticky?'sticky':index}`,"File",(_event,cx)=>{cx.stop_propagation();this.update(key,{file:file.file??file.path,change:file,mode:"source"});}));
   const colors={added:t.ansi2,removed:t.ansi1,hunk:t.ansi6,header:t.muted,context:t.foreground};
   const content=v_flex().absolute().left(0).right(0).top(-position.offset)
    .children(files.map((file,index)=>{

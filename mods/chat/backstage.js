@@ -12,7 +12,11 @@ import { exec, hc, panes } from "herdr";
 // An app command through the CLI, awaited: run() from a mod returns nothing
 // and doesn't keep calls in order.
 export async function herdr(command, args) {
-  const r = await exec("sh", ["-c", 'H=$(command -v herdr-app || echo "$HOME/.local/bin/herdr-app"); exec "$H" do "$1" "$2"', "sh", command, JSON.stringify(args)]);
+  const r = await exec("sh", ["-c", `
+    for c in "$(command -v herdr-app 2>/dev/null)" "$HOME/.local/bin/herdr-app" "/Applications/Herdr.app/Contents/MacOS/Herdr" "/Applications/Agents/Herdr.app/Contents/MacOS/Herdr"; do
+      [ -n "$c" ] && [ -x "$c" ] && exec "$c" do "$1" "$2"
+    done
+    echo "herdr-app CLI not found" >&2; exit 127`, "sh", command, JSON.stringify(args)]);
   let out = null;
   try { out = JSON.parse(r.stdout); } catch {}
   if (r.code !== 0 || !out || out.error) throw new Error(out?.error ?? (r.stderr.trim() || `${command} failed`));
@@ -32,7 +36,12 @@ async function labels(address) {
 async function moveTo(address, space, tab) {
   await herdr("terminal.park", { terminal: address });
   // The park lands once the machine replies: until then, new labels would be lost.
-  for (let i = 0; i < 30 && (await labels(address))["herdr.tab"]; i++) await pause(0.1);
+  let parked = false;
+  for (let i = 0; i < 30; i++) {
+    if (!(await labels(address))["herdr.tab"]) { parked = true; break; }
+    await pause(0.1);
+  }
+  if (!parked) throw new Error("Timed out waiting for terminal to park");
   await hc(["label", address, `herdr.space=${space}`, `herdr.tab=${tab}`]);
 }
 
@@ -67,8 +76,9 @@ export async function hide(term, fromTab) {
 // Brings the terminal back into the chat's tab.
 export async function show(term) {
   const tab = term?.labels?.["chat.tab"];
-  if (!tab) return;
-  await moveTo(term.address, term.labels["herdr.space"], tab);
+  const space = term?.labels?.["herdr.space"];
+  if (!tab || !space) return;
+  await moveTo(term.address, space, tab);
   await hc(["label", term.address, "chat.tab="]);
 }
 

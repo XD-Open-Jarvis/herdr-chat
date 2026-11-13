@@ -19,9 +19,12 @@ export async function catalog(kind, on) {
   if (kind === "claude") {
     let s = {};
     try { s = JSON.parse(await cat(".claude/settings.json", on)); } catch {}
-    const model = CLAUDE_MODELS.find((m) => m.alias === s.model || m.id === s.model)?.id ?? CLAUDE_MODELS[0].id;
+    const custom = typeof s.model === "string" && s.model.trim() ? s.model.trim() : null;
+    const known = CLAUDE_MODELS.find((m) => m.alias === custom || m.id === custom);
+    const models = (known || !custom ? CLAUDE_MODELS : [{ id: custom, name: custom }, ...CLAUDE_MODELS]).map((m) => ({ ...m, efforts: CLAUDE_EFFORTS }));
+    const model = known?.id ?? custom ?? CLAUDE_MODELS[0].id;
     const effort = s.modelSettings?.[model]?.effortLevel ?? s.effortLevel ?? "medium";
-    return { models: CLAUDE_MODELS.map((m) => ({ ...m, efforts: CLAUDE_EFFORTS })), model, effort };
+    return { models, model, effort };
   }
   let c = {};
   try { c = JSON.parse(await cat(".codex/models_cache.json", on)); } catch {}
@@ -30,10 +33,11 @@ export async function catalog(kind, on) {
     efforts: (m.supported_reasoning_levels ?? []).map((l) => l.effort),
   }));
   const toml = await cat(".codex/config.toml", on);
+  const top = toml.split(/^\s*\[/m)[0] ?? "";
   return {
     models,
-    model: /^model\s*=\s*"([^"]+)"/m.exec(toml)?.[1] ?? models[0]?.id,
-    effort: /^model_reasoning_effort\s*=\s*"([^"]+)"/m.exec(toml)?.[1] ?? "medium",
+    model: /^model\s*=\s*["']([^"']+)["']/m.exec(top)?.[1] ?? models[0]?.id,
+    effort: /^model_reasoning_effort\s*=\s*["']([^"']+)["']/m.exec(top)?.[1] ?? "medium",
   };
 }
 
@@ -56,13 +60,20 @@ export async function switchModel(term, kind, model, effort, on, sleep) {
     if (result.code !== 0) throw new Error(result.stderr?.trim() || "Could not apply model settings");
     return result;
   };
-  if (kind === "codex") return send(`/model ${model}${effort ? ` --reasoning=${effort}` : ""}`);
+  if (kind === "codex") {
+    if (!model) throw new Error("Choose a model before changing reasoning effort");
+    return send(`/model ${model}${effort ? ` --reasoning=${effort}` : ""}`);
+  }
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const f = '"$HOME/.claude/settings.json"';
-  await exec("sh", ["-c", `cp ${f} ${f}.chat-bak`], { on });
+  const bak = `"$HOME/.claude/settings.json.chat-bak-${stamp}"`;
+  const probe = await exec("sh", ["-c", `if [ -f ${f} ]; then cp ${f} ${bak} && echo had; elif [ ! -e ${f} ]; then echo missing; fi`], { on });
+  const state = (probe?.stdout ?? "").trim();
   try {
     if (model) { await send(`/model ${model}`); await sleep(1200); }
     if (effort) { await send(`/effort ${effort}`); await sleep(1200); }
   } finally {
-    await exec("sh", ["-c", `cp ${f}.chat-bak ${f} && rm -f ${f}.chat-bak`], { on });
+    if (state === "had") await exec("sh", ["-c", `[ -f ${bak} ] && mv -f ${bak} ${f}`], { on });
+    else if (state === "missing") await exec("sh", ["-c", `rm -f ${f} ${bak}`], { on });
   }
 }

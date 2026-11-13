@@ -178,3 +178,44 @@ test('ordinary JSON output and text resembling a transport header are preserved'
  const pending=toolOutput(JSON.stringify({chunk_id:'chunk',session_id:42,exit_code:null,output:'starting\n'}));
  assert.equal(pending.sessionId,42);assert.equal(pending.exitCode,null);assert.equal(pending.text,'starting');
 });
+test('shell-escaped composer attachment paths with spaces and parentheses are extracted cleanly',()=>{
+ const t=new Transcript('claude');
+ t.user('/Users/me/Library/Application\\ Support/Herdr/data/chat/files/123-Screenshot\\ 2026-11-12\\ \\(1\\).png look at this');
+ assert.equal(t.entries.length,1);
+ assert.equal(t.entries[0].text,'look at this');
+ assert.equal(t.entries[0].images.length,1);
+ assert.equal(t.entries[0].images[0].path,'/Users/me/Library/Application Support/Herdr/data/chat/files/123-Screenshot 2026-11-12 (1).png');
+});
+test('HTML/SVG/code tags in user messages are preserved while internal XML envelopes stay hidden',()=>{
+ for(const html of ['<div>hello</div>','<svg viewBox="0 0 10 10"><path d="M0 0"/></svg>','<code>a</code> is faster than <code>b</code>']){
+  const e=codex(html);assert.equal(e.length,1);assert.equal(e[0].text,html);
+ }
+ assert.equal(codex('<system-reminder>nested <system-reminder>inner</system-reminder> end</system-reminder>').length,0);
+ assert.equal(codex('<environment_context>\ncwd: /repo\n</environment_context>').length,0);
+});
+test('Claude API error messages surface usage limits and clear on the next user turn',()=>{
+ const t=new Transcript('claude');
+ t.feed(JSON.stringify({type:'assistant',isApiErrorMessage:true,message:{id:'err-1',content:[{type:'text',text:"You've hit your limit · resets 8pm"}]}}));
+ assert.equal(t.entries.length,1);assert.equal(t.entries[0].kind,'error');assert.equal(t.entries[0].usage,true);
+ assert.equal(t.issue?.usage,true);
+ t.feed(JSON.stringify({type:'user',message:{content:'continue'}}));
+ assert.equal(t.issue,null);
+});
+test('multi-block Claude assistant records count incremental output_tokens per message id',()=>{
+ const t=new Transcript('claude');
+ t.feed(JSON.stringify({type:'assistant',message:{id:'msg-1',model:'claude-opus-4-6',usage:{output_tokens:12},content:[{type:'text',text:'part 1'}]}}));
+ t.feed(JSON.stringify({type:'assistant',message:{id:'msg-1',model:'claude-opus-4-6',usage:{output_tokens:45},content:[{type:'tool_use',id:'u1',name:'Bash',input:{command:'ls'}}]}}));
+ t.feed(JSON.stringify({type:'assistant',message:{id:'msg-2',model:'claude-opus-4-6',usage:{output_tokens:10},content:[{type:'text',text:'done'}]}}));
+ assert.equal(t.tokens['claude-opus-4-6'].output,55);
+});
+test('custom-title, self-contained Codex web_search_call and null content records are handled safely',()=>{
+ const tc=new Transcript('claude');
+ tc.feed(JSON.stringify({type:'custom-title',customTitle:'Renamed session'}));
+ assert.equal(tc.title,'Renamed session');
+ const tx=new Transcript('codex');
+ assert.doesNotThrow(()=>tx.feed(JSON.stringify({type:'response_item',payload:{type:'message',role:'assistant',content:null}})));
+ assert.doesNotThrow(()=>tx.feed('{not valid json'));
+ tx.feed(JSON.stringify({type:'response_item',payload:{type:'web_search_call',status:'completed',action:{query:'gpui layout'}}}));
+ assert.equal(tx.entries[0].items[0].result,'Searched: gpui layout');
+ assert.equal(tx.entries[0].items[0].error,false);
+});

@@ -23,12 +23,26 @@ export async function copyText(text) {
 export async function pasteImage(path) {
   const r = await sh(`
     if command -v osascript >/dev/null 2>&1; then
-      osascript -e "set f to open for access (POSIX file \\"$1\\") with write permission" \\
-        -e "write (the clipboard as «class PNGf») to f" -e "close access f" >/dev/null 2>&1
+      osascript - "$1" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  set imgData to the clipboard as «class PNGf»
+  set f to open for access (POSIX file (item 1 of argv)) with write permission
+  try
+    set eof of f to 0
+    write imgData to f
+    close access f
+  on error errMsg
+    try
+      close access f
+    end try
+    error errMsg
+  end try
+end run
+APPLESCRIPT
     elif command -v wl-paste >/dev/null 2>&1 && wl-paste --list-types 2>/dev/null | grep -q '^image/png'; then wl-paste --type image/png > "$1"
     elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard -t image/png -o > "$1" 2>/dev/null
     else exit 3; fi
-    [ -s "$1" ]`, path);
+    if [ -s "$1" ]; then exit 0; else rm -f "$1"; exit 1; fi`, path);
   return r.code === 3 ? "missing" : r.code === 0;
 }
 
@@ -42,8 +56,16 @@ export function openFile(path) {
 export async function pickFiles(prompt = "Attach to your message") {
   const r = await sh(`
     if command -v osascript >/dev/null 2>&1; then
-      osascript -e "set fs to choose file with prompt \\"$1\\" with multiple selections allowed" \\
-        -e 'set out to ""' -e 'repeat with f in fs' -e 'set out to out & POSIX path of f & linefeed' -e 'end repeat' -e 'return out'
+      osascript - "$1" <<'APPLESCRIPT'
+on run argv
+  set fs to choose file with prompt (item 1 of argv) with multiple selections allowed
+  set out to ""
+  repeat with f in fs
+    set out to out & POSIX path of f & linefeed
+  end repeat
+  return out
+end run
+APPLESCRIPT
     elif command -v kdialog >/dev/null 2>&1; then kdialog --title "$1" --getopenfilename "$HOME" --multiple --separate-output
     elif command -v zenity >/dev/null 2>&1; then zenity --file-selection --multiple --separator="
 " --title="$1"
@@ -51,7 +73,7 @@ export async function pickFiles(prompt = "Attach to your message") {
 " --title="$1"
     else exit 3; fi; true`, prompt);
   if (r.code === 3) return null;
-  return r.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  return r.stdout.split("\n").map((l) => l.replace(/\r$/, "")).filter(Boolean);
 }
 
 // An image's pixel size from its header (PNG, JPEG, GIF, WebP), with nothing

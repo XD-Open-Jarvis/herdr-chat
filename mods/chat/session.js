@@ -34,17 +34,20 @@ if identity:
     if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{5,12}", prefix):
         raise RuntimeError("Invalid terminal title identity")
     matches = []
+    subagent_hits = 0
     for path in root.rglob("rollout-*" + prefix + "*.jsonl"):
         try:
             meta = read_meta(path)
-            if not primary(meta): continue
             ident = meta.get("id", "")
             if ident.startswith(prefix) and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", ident):
                 if identity.get("complete") and ident != prefix: continue
+                if not primary(meta):
+                    subagent_hits += 1
+                    continue
                 matches.append((str(path), ident))
         except Exception: pass
     found = matches[0] if len(matches) == 1 else (None, None)
-    emit(file=found[0], sessionId=found[1], evidence="title", matchCount=len(matches))
+    emit(file=found[0], sessionId=found[1], evidence="title", matchCount=len(matches), subagent=bool(subagent_hits and not matches))
 def norm(s):
     s = re.sub(r"\\x1b\\[[0-?]*[ -/]*[@-~]", "", s)
     return re.sub(r"[\\W_]+", "", s).casefold()

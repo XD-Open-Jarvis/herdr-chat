@@ -71,3 +71,17 @@ test('change overview totals recorded lines and preserves relative directories i
  assert.deepEqual(changeOverview(files),{added:26,removed:5,labels:['RECIPE.md','docs/release.md','scripts/install.py','README.md']});
  assert.equal(changeOverview([{path:'/gone',added:null,removed:null}]).removed,null);
 });
+test('Read, Grep and Edit results containing Error strings are not falsely marked failed',()=>{
+ for(const name of ['Read','Grep','Edit']){
+  const item={name,input:{file_path:'a.js',old_string:'a',new_string:'b'},result:'line 10: Error: failed\n{"isError":true,"exit_code":1}',error:false};
+  assert.equal(toolDetails(item).error,false);
+ }
+});
+test('ES6 unicode code-point escapes in exec scripts and CRLF patches parse cleanly',()=>{
+ const detail=toolDetails(wrapped('await tools.exec_command({cmd:"echo \\u{1F680}"});'));
+ assert.equal(detail.summary,'echo 🚀');
+ const crlfPatch='*** Begin Patch\r\n*** Update File: /repo/win.js\r\n@@\r\n-old\r\n+new\r\n*** End Patch\r\n';
+ const changes=patchChanges(crlfPatch);
+ assert.equal(changes.length,1);assert.equal(changes[0].path,'/repo/win.js');
+ assert.equal(changes[0].added,1);assert.equal(changes[0].removed,1);
+});

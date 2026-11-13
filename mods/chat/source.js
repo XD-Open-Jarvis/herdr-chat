@@ -1,9 +1,9 @@
 // Finds the session log an agent terminal is writing, and reads it as it grows.
 import { exec } from "herdr";
-import { Buffer } from "buffer";
 
 // Start this far from the end of a long log; earlier history is skipped.
 const TAIL_BYTES = 4 * 1024 * 1024;
+const TAIL_CHUNK_BYTES = 4 * 1024 * 1024;
 
 const sh = (script, args, on) => exec("sh", ["-c", script, "sh", ...args], { on });
 
@@ -20,7 +20,7 @@ const CLAUDE = `
 for p in "$1" $(pgrep -P "$1"); do
   f="$HOME/.claude/sessions/$p.json"
   [ -f "$f" ] || continue
-  id=$(sed -n 's/.*"sessionId":"\\([^"]*\\)".*/\\1/p' "$f")
+  id=$(sed -n 's/.*"sessionId"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$f")
   [ -n "$id" ] || continue
   log=$(ls "$HOME"/.claude/projects/*/"$id".jsonl 2>/dev/null | head -1)
   [ -n "$log" ] && echo "$log" && exit 0
@@ -31,7 +31,7 @@ const CODEX = `
 kids=$(pgrep -P "$1" | tr '\\n' ' ')
 grand=$(for k in $kids; do pgrep -P "$k"; done | tr '\\n' ' ')
 for p in "$1" $kids $grand; do
-  { lsof -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p'; ls -l "/proc/$p/fd" 2>/dev/null | sed 's/.* -> //'; } | grep '/sessions/.*rollout-.*\\.jsonl$'
+  { lsof -nP -p "$p" -Fn 2>/dev/null | sed -n 's/^n//p'; ls -l "/proc/$p/fd" 2>/dev/null | sed 's/.* -> //'; } | grep '/sessions/.*rollout-.*\\.jsonl$'
 done | sort -u | { files=$(cat); [ "$(printf '%s\\n' "$files" | grep -c .)" = 1 ] && printf '%s\\n' "$files"; }`;
 
 export async function locate(term, kind) {
@@ -42,6 +42,43 @@ export async function locate(term, kind) {
   return r.stdout.trim().split("\n")[0] || null;
 }
 
+// Track raw byte offsets in Python before UTF-8 decoding so splitting a
+// multi-byte character at the tail boundary never shifts future offsets, and
+// cap each read well below Herdr's 8 MiB exec stdout limit.
+export const TAIL_PY = `
+import os, sys
+path, off, budget, skip, cap = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4] == "1", int(sys.argv[5])
+size = os.path.getsize(path)
+trunc = False
+if off < 0:
+    off = max(0, size - budget)
+    skip = off > 0
+    trunc = skip
+elif off > size:
+    off = 0
+    skip = False
+end = min(size, off + cap)
+with open(path, "rb") as f:
+    f.seek(off)
+    data = f.read(max(0, end - off))
+    while end < size and b"\\n" not in data and len(data) < 6 * 1024 * 1024:
+        extra = f.read(min(1024 * 1024, size - end))
+        if not extra: break
+        data += extra
+        end += len(extra)
+cut = data.rfind(b"\\n")
+if cut < 0:
+    sys.stdout.write(f"{off} {int(trunc)} {int(skip)} {size}\\n")
+    sys.exit(0)
+chunk = data[:cut + 1]
+off += cut + 1
+if skip:
+    chunk = chunk.split(b"\\n", 1)[1]
+    skip = False
+sys.stdout.write(f"{off} {int(trunc)} {int(skip)} {size}\\n")
+sys.stdout.write(chunk.decode("utf-8", errors="replace"))
+`;
+
 // Reads complete new lines from `file` since the last call.
 export class Tail {
   constructor(file, on, bytes = TAIL_BYTES) {
@@ -49,27 +86,32 @@ export class Tail {
     this.file = file;
     this.on = on;
     this.offset = null;
+    this.skipFirst = false;
+    this.truncated = false;
   }
 
   async read() {
-    let skipFirst = false;
-    if (this.offset === null) {
-      const r = await sh('wc -c < "$1"', [this.file], this.on);
-      const size = parseInt(r.stdout.trim(), 10) || 0;
-      this.offset = Math.max(0, size - this.bytes);
-      skipFirst = this.offset > 0;
-      this.truncated = skipFirst;
+    const out = [];
+    let targetSize = null;
+    for (let guard = 0; guard < 64; guard++) {
+      const first = this.offset === null;
+      const r = await exec("python3", [
+        "-c", TAIL_PY, this.file, String(first ? -1 : this.offset),
+        String(this.bytes), this.skipFirst ? "1" : "0", String(TAIL_CHUNK_BYTES),
+      ], { on: this.on });
+      if (r.code !== 0) throw new Error(r.stderr.trim() || "can't read the session log");
+      const nl = r.stdout.indexOf("\n");
+      const [nextOff, trunc, nextSkip, fileSize] = (nl < 0 ? r.stdout : r.stdout.slice(0, nl)).trim().split(" ").map(Number);
+      const prevOff = this.offset;
+      this.offset = nextOff;
+      if (first) this.truncated = Boolean(trunc);
+      this.skipFirst = Boolean(nextSkip);
+      if (targetSize === null) targetSize = fileSize;
+      const body = nl < 0 ? "" : r.stdout.slice(nl + 1);
+      if (body) out.push(...body.split("\n").filter(Boolean));
+      if (this.offset >= targetSize || this.offset === prevOff || !body && first) break;
     }
-    const r = await exec("tail", ["-c", `+${this.offset + 1}`, this.file], { on: this.on });
-    if (r.code !== 0) throw new Error(r.stderr.trim() || "can't read the session log");
-    const s = r.stdout;
-    const cut = s.lastIndexOf("\n");
-    if (cut < 0) return [];
-    const chunk = s.slice(0, cut + 1);
-    this.offset += Buffer.from(chunk, "utf8").length;
-    const lines = chunk.split("\n").filter(Boolean);
-    if (skipFirst) lines.shift();
-    return lines;
+    return out;
   }
 }
 

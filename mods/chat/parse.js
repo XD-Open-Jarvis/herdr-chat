@@ -13,16 +13,41 @@ export function hcMessage(text) {
 
 // hc prepends file descriptors to the person's text. Consume only valid
 // leading transport records; JSON examples in prose/code remain untouched.
+const SHELL_ESCAPED_PATH = /^\s*(?:'((?:[^']|'\\'')*)'|"([^"]+)"|((?:\\[ \\'"()&;$`!*?[\]{}<>|#~]|[^\s'"])+))/;
+
+const INTERNAL_ENVELOPE_TAGS = new Set([
+  "environment_context", "task-notification", "subagent_notification", "teammate-message",
+  "ide_opened_file", "ide_selection", "user-prompt-submit-hook", "command-message",
+  "local-command-caveat", "permissions", "collaboration_mode", "app-context",
+  "turn_aborted", "user_shell_command", "instructions", "user_instructions",
+  "developer_instructions", "skill", "context", "fast_mode_info",
+]);
+
+export function isInternalEnvelope(text) {
+  const m = /^<([a-z][a-z0-9_-]*)(?:\s[^>]*)?>([\s\S]*)<\/\1>$/.exec(text);
+  if (!m || !INTERNAL_ENVELOPE_TAGS.has(m[1])) return false;
+  const tag = m[1], inner = m[2];
+  const token = new RegExp(`<(\\/?)${tag}(?:\\s[^>]*)?>`, "g");
+  let depth = 1, hit;
+  while ((hit = token.exec(inner))) {
+    depth += hit[1] ? -1 : 1;
+    if (depth <= 0) return false;
+  }
+  return depth === 1;
+}
+
 export function userAttachments(text) {
   const files = [];
   for (;;) {
     const match = /^\s*((?:\\)*\{[^\r\n]*?(?:\\)*\})/.exec(text);
     if (!match) {
-      // The composer sends cached attachment paths as shell-quoted tokens.
-      // Recognize Herdr-managed file locations, never arbitrary prose paths.
-      const token = /^\s*(?:'((?:[^']|'\\'')*)'|"([^"]+)"|(\S+))/.exec(text);
-      const path = (token?.[1] ?? token?.[2] ?? token?.[3] ?? "").replace(/'\\''/g, "'");
-      if (!/(?:^|\/)(?:herdr-app\/data\/chat\/files|herdr-core\/[^/]+\/files)\//.test(path)
+      // The composer sends cached attachment paths as shell-quoted or
+      // backslash-escaped tokens. Recognize Herdr-managed file locations only.
+      const token = SHELL_ESCAPED_PATH.exec(text);
+      const path = token?.[1] != null ? token[1].replace(/'\\''/g, "'")
+        : token?.[2] != null ? token[2]
+        : (token?.[3] ?? "").replace(/\\([ \\'"()&;$`!*?[\]{}<>|#~])/g, "$1");
+      if (!/(?:^|\/)(?:(?:herdr[^/]*\/)?data\/chat\/files|herdr-core\/[^/]+\/files)\//i.test(path)
         || !/^(?:\/|[A-Za-z]:[\\/])/.test(path)) break;
       files.push({ path, bytes: null, name: path.split(/[\\/]/).pop() });
       text = text.slice(token[0].length).trimStart();
@@ -132,7 +157,7 @@ export class Transcript {
     this.effort = null;
     // Tokens the session used, per model, from its replies (each counted once).
     this.tokens = {};
-    this.counted = new Set();
+    this.counted = new Map();
   }
 
   push(entry) {
@@ -147,7 +172,13 @@ export class Transcript {
 
   user(text, images = []) {
     const incoming = hcMessage(text);
-    text = incoming.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+    text = incoming.text;
+    let prev;
+    do {
+      prev = text;
+      text = text.replace(/<system-reminder>(?:(?!<system-reminder>)[\s\S])*?<\/system-reminder>/g, "");
+    } while (text !== prev);
+    text = text.trim();
     // Slash commands and their output, as Claude Code records them.
     const cmd = /<command-name>([^<]*)<\/command-name>/.exec(text);
     if (cmd) {
@@ -179,7 +210,7 @@ export class Transcript {
     if (stdout) return this.note(stripAnsi(stdout[1]).trim().split("\n").slice(-6).join("\n"));
     if (/^\[Request interrupted/.test(text)) return this.note("Interrupted");
     // Other tag-wrapped injections (task notifications, environment context).
-    if (/^<([a-z_-]+)[^>]*>[\s\S]*<\/\1>$/.test(text)) return;
+    if (isInternalEnvelope(text)) return;
     const attached = userAttachments(text);
     text = attached.text;
     const files = [];
@@ -194,6 +225,10 @@ export class Transcript {
       } else if (!files.some(existing => existing.path === file.path)) files.push(file);
     }
     if (!text && !images.length && !files.length) return;
+    if (this.kind !== "codex") {
+      this.turnId = `turn-${this.next}`;
+      this.issue = null;
+    }
     this.push({ kind: "user", text, images, files, ...(incoming.from ? { from: incoming.from } : {}) });
   }
 
@@ -275,23 +310,28 @@ export class Transcript {
   feed(line) {
     let d;
     try { d = JSON.parse(line); } catch { return; }
-    if (this.kind === "codex") this.codex(d);
-    else this.claude(d);
+    try {
+      if (this.kind === "codex") this.codex(d);
+      else this.claude(d);
+    } catch {}
   }
 
   claude(d) {
     if (d.isSidechain) return;
     if (d.type === "system" && d.subtype === "turn_duration")
       return this.completed(d.durationMs, d.timestamp, d.uuid);
+    if (d.type === "system" && d.subtype === "api_error")
+      return this.agentError(d.error ?? d.content ?? d, d.timestamp, this.turnId ?? d.uuid);
     if (d.type === "queue-operation") {
-      const text = typeof d.content === "string" ? d.content : "";
+      const text = typeof d.content === "string" ? d.content : toText(d.content);
       if (d.operation === "enqueue") this.queue.push(text);
       else if (d.operation === "dequeue") this.queue.shift();
-      else if (d.operation === "remove") { const i = this.queue.indexOf(text); this.queue.splice(i >= 0 ? i : 0, 1); }
+      else if (d.operation === "remove") { const i = this.queue.indexOf(text); if (i >= 0) this.queue.splice(i, 1); }
       else if (d.operation === "popAll") this.queue = [];
       return;
     }
-    if (d.type === "ai-title" && d.aiTitle) this.title = d.aiTitle;
+    if (d.type === "custom-title" && d.customTitle) this.title = d.customTitle;
+    else if (d.type === "ai-title" && d.aiTitle) this.title = d.aiTitle;
     // Each message logs the permission mode it was sent in.
     if (d.type === "user" && d.permissionMode) this.mode = d.permissionMode;
     if (d.type === "system" && d.subtype === "compact_boundary") {
@@ -335,6 +375,10 @@ export class Transcript {
       }
       if (texts.length || images.length) this.user(texts.join("\n"), images);
     } else if (d.type === "assistant") {
+      if (d.isApiErrorMessage) {
+        this.agentError({ message: toText(d.message?.content), code: d.error }, d.timestamp, this.turnId ?? d.uuid);
+        return;
+      }
       if (d.message?.model && !d.message.model.startsWith("<")) this.model = d.message.model;
       const u = d.message?.usage, id = d.message?.id;
       // How full the context is: what the latest reply was sent and wrote.
@@ -342,15 +386,22 @@ export class Transcript {
         if (this.base == null) this.base = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
         this.context = { used: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0), window: this.context?.window ?? null };
       }
-      if (u && id && !this.counted.has(id) && !d.message.model?.startsWith("<")) {
-        this.counted.add(id);
+      if (u && id && !d.message.model?.startsWith("<")) {
         const m = (this.tokens[d.message.model] ??= { input: 0, output: 0 });
-        m.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-        m.output += u.output_tokens ?? 0;
+        const prev = this.counted.get(id);
+        if (!prev) {
+          const out = u.output_tokens ?? 0;
+          m.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+          m.output += out;
+          this.counted.set(id, { output: out });
+        } else if ((u.output_tokens ?? 0) > prev.output) {
+          m.output += (u.output_tokens ?? 0) - prev.output;
+          prev.output = u.output_tokens ?? 0;
+        }
       }
       for (const b of d.message?.content ?? []) {
-        if (b.type === "text") this.assistant(b.text);
-        else if (b.type === "tool_use") this.toolUse(b.id, b.name, b.input);
+        if (b?.type === "text") this.assistant(b.text);
+        else if (b?.type === "tool_use") this.toolUse(b.id, b.name, b.input);
       }
     }
   }
@@ -360,7 +411,8 @@ export class Transcript {
     if (!message?.trim()) return;
     const code = typeof error?.codex_error_info === "string" ? error.codex_error_info
       : typeof error?.code === "string" ? error.code : null;
-    const usage = /usage_limit|rate_limit_exceeded/i.test(code ?? "") || /hit your usage limit|usage limit (?:reached|exceeded)/i.test(message);
+    const usage = /usage_limit|rate_limit/i.test(code ?? "")
+      || /hit your (?:usage )?limit|usage limit (?:reached|exceeded)|out of extra usage/i.test(message);
     if (this.issue?.turn === turn && this.issue.message === message) return;
     this.issue = {message, code, usage, turn};
     this.push({kind:"error", event:"agent_error", text:message, code, usage, timestamp});
@@ -407,13 +459,14 @@ export class Transcript {
     }
     if (d.type !== "response_item") return;
     if (p.type === "message") {
-      if (p.role === "assistant") return this.assistant(toText(p.content.filter((c) => c.type === "output_text")));
+      if (p.role === "assistant") return this.assistant(toText((p.content ?? []).filter((c) => c?.type === "output_text")));
       if (p.role !== "user") return;
       const texts = [], images = [];
       for (const c of p.content ?? []) {
+        if (!c) continue;
         if (c.type === "input_image") { const img = fromDataUrl(c.image_url); if (img) images.push(img); continue; }
         let t = (c.text ?? "").trim();
-        if (!t || /^<\/?image\b/.test(t) || (/^<([a-z_-]+)[^>]*>[\s\S]*<\/\1>$/.test(t) && !/^<hc(?:\s|>)/.test(t)) || /^# AGENTS\.md/.test(t)) continue;
+        if (!t || /^<\/?image\b/.test(t) || (isInternalEnvelope(t) && !/^<hc(?:\s|>)/.test(t)) || /^# AGENTS\.md/.test(t)) continue;
         // The desktop app lists attachments, then "## My request:".
         const req = t.indexOf("## My request:");
         if (t.startsWith("# Files mentioned by the user:")) t = req >= 0 ? t.slice(req + 14).trim() : "";
@@ -421,7 +474,11 @@ export class Transcript {
       }
       if (texts.length || images.length) this.user(texts.join("\n"), images);
     } else if (/_call$/.test(p.type)) {
-      this.toolUse(p.call_id ?? p.id, p.name ?? p.type.replace(/_call$/, ""), p.arguments ?? p.input ?? p.action);
+      const id = p.call_id ?? p.id ?? `call-${this.next}-${this.revision}`;
+      this.toolUse(id, p.name ?? p.type.replace(/_call$/, ""), p.arguments ?? p.input ?? p.action);
+      if (p.type === "web_search_call" && p.status && p.status !== "in_progress") {
+        this.toolResult(id, p.action?.query ? `Searched: ${p.action.query}` : "Completed", p.status === "failed");
+      }
     } else if (/_call_output$/.test(p.type)) {
       this.toolResult(p.call_id, p.output, p.status === "failed");
     }

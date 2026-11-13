@@ -52,7 +52,10 @@ export default class Tabs extends View {
       const first = this.space === undefined;
       this.space = space.id; this.pending = null;
       if (!(first && !(space.id in this.panels))) {
-        const stored = this.panels[space.id] ?? null, want = enabled.includes(stored) ? stored : null;
+        const stored = this.panels[space.id] ?? null;
+        const canRestore = Boolean(stored) && (enabled.includes(stored)
+          || (stored === "chat-preview" && Boolean(body?.children?.some((child) => child.id === "chat-preview"))));
+        const want = canRestore ? stored : null;
         if (want !== now) {
           this.pending = { want, until: Date.now() + 1000 };
           if (want) { run("layout.select", { stack: "panel-body", child: want }); run("layout.show", { id: "panel" }); }
