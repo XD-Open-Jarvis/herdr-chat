@@ -60,6 +60,8 @@ const SORTS = [
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
+// Keep the separator in sync with the space avatar colors in spaces-chat.
+const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 
 function duration(ms) {
   const m = Math.floor(ms / 60000);
@@ -221,6 +223,7 @@ export default class Agents extends View {
     const all = terminals();
     this.migratePins(all);
     const shown = focused()?.agent;
+    const spaceColors = shared("space.colors") ?? {};
     const now = Date.now();
     this.track(list, now);
     // A kept sub-agent (one with a pane) is in agents() too: where a tree shows
@@ -332,6 +335,8 @@ export default class Agents extends View {
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
       const name = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      const color = spaceColors[a.space] ?? "ansi6";
+      const spaceColor = color.startsWith("#") ? color : (MARK[color] ?? t[color] ?? t.dim);
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -357,7 +362,9 @@ export default class Agents extends View {
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
-          .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
+          .when(full && Boolean(more), el => el.child(h_flex().flex_1().min_w(0).gap(4)
+            .child(div().flex_none().text_color(spaceColor).child("\u00b7"))
+            .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(more)))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el
