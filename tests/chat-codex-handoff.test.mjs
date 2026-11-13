@@ -1729,7 +1729,7 @@ test("Claude default context window, Codex rate limits, and contextBadge rings f
       rounded() { return el; }, text_size() { return el; }, text_color() { return el; },
       cursor_pointer() { return el; }, hover() { return el; }, tooltip(v) { el.tips.push(v); return el; },
       on_click() { return el; }, relative() { return el; }, size() { return el; }, flex_none() { return el; },
-      absolute() { return el; }, inset_0() { return el; }, rounded_full() { return el; }, border_1() { return el; }, border_color() { return el; },
+      left() { return el; }, top() { return el; }, absolute() { return el; }, inset_0() { return el; }, rounded_full() { return el; }, border_1() { return el; }, border_color() { return el; },
       when(cond, fn) { if (cond) fn(el); return el; },
       child(c) { el.childrenList.push(c); return el; },
       children(cs) { el.childrenList.push(...cs); return el; },

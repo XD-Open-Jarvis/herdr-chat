@@ -169,12 +169,14 @@ function ringArcPath(pct) {
   } else if (key === 0) {
     cached = null;
   } else {
-    const a = (key / 100) * 2 * Math.PI - Math.PI / 2;
-    const tx = Number((c + r * Math.cos(a)).toFixed(3));
-    const ty = Number((c + r * Math.sin(a)).toFixed(3));
+    // The missing (used) segment advances clockwise from twelve o'clock.
+    // Paint the remaining segment from its moving start back to twelve.
+    const a = ((100 - key) / 100) * 2 * Math.PI - Math.PI / 2;
+    const sx = Number((c + r * Math.cos(a)).toFixed(3));
+    const sy = Number((c + r * Math.sin(a)).toFixed(3));
     cached = PathBuilder.stroke(RING_STROKE)
-      .move_to(c, top)
-      .arc_to(r, r, 0, key > 50, true, tx, ty)
+      .move_to(sx, sy)
+      .arc_to(r, r, 0, key > 50, true, c, top)
       .build();
   }
   RING_PATHS.set(key, cached);
@@ -189,8 +191,8 @@ function ringIcon(pct, color, trackColor) {
   const track = ringArcPath(100);
   const arc = clamped > 0 ? ringArcPath(clamped) : null;
   return div().relative().size(RING_SIZE).flex_none()
-    .child(window.paint_path(track, trackColor).absolute().inset_0())
-    .when(Boolean(arc), (el) => el.child(window.paint_path(arc, color).absolute().inset_0()));
+    .child(window.paint_path(track, trackColor).absolute().left(0).top(0).size(RING_SIZE))
+    .when(Boolean(arc), (el) => el.child(window.paint_path(arc, color).absolute().left(0).top(0).size(RING_SIZE)));
 }
 
 // Hints a terminal shows while one of its pickers or panels is open.
@@ -3383,11 +3385,11 @@ export default class Chat extends View {
     const ringColor = (pct, normal) => pct >= 90 ? t.blocked : pct >= 75 ? t.working : normal;
     const badge = (id, pct, normal, tip, onClick) => {
       const color = ringColor(pct, normal);
-      return h_flex().id(id).px(3).py(3).items_center().rounded(6)
+      return h_flex().id(id).flex_none().px(3).py(3).items_center().rounded(6)
         .cursor_pointer().hover((s) => s.bg(t.hover))
         .tooltip(tip)
         .on_click(onClick)
-        .child(ringIcon(100 - pct, color, t.border));
+        .child(ringIcon(100 - pct, color, t.input));
     };
     const items = [];
     if (limits.fiveHour) {
