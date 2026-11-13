@@ -3175,9 +3175,9 @@ export default class Chat extends View {
     const { kind, cat, model, effort } = this.current();
     const name = [modelName(cat?.models, model), effort].filter(Boolean).join(" · ");
     if (!name) return div();
-    const label = h_flex().gap(5).items_center()
+    const label = h_flex().w_auto().flex_none().gap(5).items_center()
       .child(div().max_w(180).truncate().text_color(t.foreground).child(modelName(cat?.models, model)))
-      .child(div().w(52).flex_none().text_color(t.dim).child(effort ?? ""))
+      .when(Boolean(effort), el => el.child(div().w_auto().flex_none().text_color(t.dim).child(effort)))
       .child(div().size(12).flex_none().flex().items_center().justify_center().text_color(t.muted)
         .child(this.switching ? div().frames(SPINNER, 90)
           : svg("mods/chat/icons/chevron-down.svg").size(12)));
@@ -3197,7 +3197,7 @@ export default class Chat extends View {
       .when(term?.status === "working", (el) => el.child(div().px(10).py(6).text_size(11).text_color(t.dim).child("The agent is busy; a switch waits in its queue.")));
     return Popover.new("model-menu").anchor("bottom_right").open(Boolean(this.showModels))
       .on_open_change((open, cx) => { this.showModels = open; cx.notify(); })
-      .trigger(div().id("model").flex_none().h(30).px(10).flex().items_center().rounded_full().cursor_pointer().text_size(12.5)
+      .trigger(div().id("model").w_auto().flex_none().h(30).px(10).flex().items_center().rounded_full().cursor_pointer().text_size(12.5)
         .when(Boolean(this.showModels), (el) => el.bg(t.hover)).text_color(this.showModels ? t.foreground : t.muted)
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .tooltip(this.switching ? "Applying model settings…" : name).child(label))
