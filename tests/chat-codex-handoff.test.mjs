@@ -1717,6 +1717,7 @@ test("Claude default context window, Codex rate limits, and contextBadge rings f
   assert.equal(xt.limits.secondary.used_percent, 80);
 
   const builtPaths = [];
+  const paintedColors = [];
   const makeEl = (tag) => {
     const el = {
       tag,
@@ -1748,7 +1749,7 @@ test("Claude default context window, Codex rate limits, and contextBadge rings f
     div: () => makeEl("div"),
     h_flex: () => makeEl("h_flex"),
     PathBuilder: { stroke: () => makePathBuilder() },
-    window: { paint_path: (path, color) => ({ ...makeEl("path"), path, color }) },
+    window: { paint_path: (path, color) => { paintedColors.push(color); return { ...makeEl("path"), path, color }; } },
   });
   const theme = { accent: "#3b82f6", working: "#f59e0b", blocked: "#ef4444", muted: "#94a3b8", dim: "#64748b", border: "#334155", hover: "#1e293b", foreground: "#f8fafc" };
 
@@ -1761,8 +1762,9 @@ test("Claude default context window, Codex rate limits, and contextBadge rings f
   assert.deepEqual(badges.childrenList.map((c) => c.idValue), ["limit-5h-badge", "limit-7d-badge"]);
   assert.equal(badges.childrenList[0].childrenList.length, 1);
   assert.equal(badges.childrenList[1].childrenList.length, 1);
-  assert.match(badges.childrenList[0].tips[0], /^5h limit: 42% used/);
-  assert.match(badges.childrenList[1].tips[0], /^7d limit: 80% used/);
+  assert.match(badges.childrenList[0].tips[0], /^5h limit: 58% remaining/);
+  assert.match(badges.childrenList[1].tips[0], /^7d limit: 20% remaining/);
+  assert.equal(paintedColors[1], theme.muted);
   assert.ok(builtPaths.length >= 3);
 
   const claudeNoLimits = Object.assign(Object.create(Chat.prototype), {
@@ -1777,6 +1779,6 @@ test("Claude default context window, Codex rate limits, and contextBadge rings f
   });
   const cBadges = claudeChat.contextBadge(theme);
   assert.deepEqual(cBadges.childrenList.map((c) => c.idValue), ["limit-5h-badge", "limit-7d-badge"]);
-  assert.match(cBadges.childrenList[0].tips[0], /^5h limit: 18% used/);
-  assert.match(cBadges.childrenList[1].tips[0], /^7d limit: 92% used/);
+  assert.match(cBadges.childrenList[0].tips[0], /^5h limit: 82% remaining/);
+  assert.match(cBadges.childrenList[1].tips[0], /^7d limit: 8% remaining/);
 });

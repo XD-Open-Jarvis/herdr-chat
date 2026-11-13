@@ -3387,19 +3387,19 @@ export default class Chat extends View {
         .cursor_pointer().hover((s) => s.bg(t.hover))
         .tooltip(tip)
         .on_click(onClick)
-        .child(ringIcon(pct, color, t.border));
+        .child(ringIcon(100 - pct, color, t.border));
     };
     const items = [];
     if (limits.fiveHour) {
       const { pct, resetsAt } = limits.fiveHour;
-      items.push(badge("limit-5h-badge", pct, t.accent,
-        `5h limit: ${pct}% used${resetText(resetsAt)}`,
+      items.push(badge("limit-5h-badge", pct, t.muted,
+        `5h limit: ${100 - pct}% remaining${resetText(resetsAt)}`,
         (_e, cx) => this.hostCard("usage", cx)));
     }
     if (limits.sevenDay) {
       const { pct, resetsAt } = limits.sevenDay;
       items.push(badge("limit-7d-badge", pct, t.muted,
-        `7d limit: ${pct}% used${resetText(resetsAt)}`,
+        `7d limit: ${100 - pct}% remaining${resetText(resetsAt)}`,
         (_e, cx) => this.hostCard("usage", cx)));
     }
     return items.length ? h_flex().id("usage-badges").gap(2).items_center().children(items) : null;
